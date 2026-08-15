@@ -1,0 +1,9 @@
+# Nothing here is built, so this list is short on purpose.
+
+# The agent's own configuration lives in ~/.config/ajar, but a stray copy beside the source is
+# exactly the file that must never be committed: it holds the intercom's password.
+agent.json
+*.local.json
+
+.DS_Store
+node_modules/

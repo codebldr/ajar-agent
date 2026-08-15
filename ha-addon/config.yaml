@@ -1,0 +1,41 @@
+# The Home Assistant add-on.
+#
+# Copy this folder into `/addons` on the Home Assistant machine, reload the add-on store, and
+# it appears alongside the official ones. Everything it asks for is on one form: the intercom's
+# password, and nothing else unless the house has two gates.
+name: Ajar
+version: "0.1.0"
+slug: ajar
+description: Your intercom on your phone, from anywhere, without the manufacturer's cloud
+url: https://github.com/romeoonisim/ajar-agent
+arch:
+  - aarch64
+  - amd64
+  - armv7
+  - armhf
+
+# The agent finds the intercom by shouting on the local network and serves phones on it. Behind
+# the add-on's own address it can do neither, so it shares the host's network. That is the same
+# access the manufacturer's own app has on a phone, and less than most camera integrations take.
+host_network: true
+
+# Its configuration — including the intercom's password — belongs in the add-on's own storage,
+# not in the image and not in Home Assistant's configuration file.
+map:
+  - addon_config:rw
+
+startup: services
+boot: auto
+init: false
+
+options:
+  username: admin
+  password: ""
+  host: ""
+
+schema:
+  # `admin` on almost every one of these, but not worth assuming for somebody who changed it.
+  username: str
+  password: password
+  # Left empty, the agent goes and finds the intercom. Only needed when more than one answers.
+  host: str?
