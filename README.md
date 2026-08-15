@@ -60,6 +60,13 @@ with a **slash** — `…subtype=1/trackID=5`, not `&` — or the camera answers
 **ignores the interleaved channels you ask for**; read them back from the `Transport` header or
 your audio goes nowhere.
 
+## Going deeper
+
+**[docs/INTERCOM.md](docs/INTERCOM.md)** has the rest: the flags, the event codes and what this
+device actually emits when a doorbell is pressed, the channel numbering, how it is found across
+a router, and the security reasoning behind every trust decision in here. All measured against
+real hardware rather than taken from a manual.
+
 ## Privacy
 
 The agent holds your intercom's password on your own machine, in
