@@ -15,6 +15,9 @@ import { createHash } from 'node:crypto'
 
 const md5 = (text) => createHash('md5').update(text).digest('hex').toUpperCase()
 
+/** Every reply here is a small JSON object. Anything larger is a fault, not an answer. */
+const MAX_REPLY_BYTES = 512 * 1024
+
 export class Rpc {
   #host
   #port
@@ -92,7 +95,12 @@ export class Rpc {
         (response) => {
           let text = ''
           response.setEncoding('utf8')
-          response.on('data', (chunk) => { text += chunk })
+          response.on('data', (chunk) => {
+            text += chunk
+            if (text.length <= MAX_REPLY_BYTES) return
+            outbound.destroy()
+            reject(new Error(`reply larger than ${MAX_REPLY_BYTES} bytes`))
+          })
           response.on('end', () => {
             try {
               resolve(JSON.parse(text))

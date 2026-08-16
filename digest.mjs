@@ -6,6 +6,16 @@ import http from 'node:http'
 
 const md5 = (value) => createHash('md5').update(value, 'utf8').digest('hex')
 
+/**
+ * The largest answer worth reading from the intercom.
+ *
+ * Every reply this asks for is a few lines of `name=value`; the biggest is the encoder
+ * configuration, at a few kilobytes. A device that answers with more than this is broken or is
+ * not the device it claims to be, and either way the agent must not sit there collecting it
+ * until the machine runs out of memory.
+ */
+const MAX_BODY_BYTES = 1024 * 1024
+
 /** Turns `Digest realm="x", nonce="y"` into an object, quotes stripped. */
 export function parseChallenge(header) {
   const fields = {}
@@ -179,7 +189,14 @@ export function digestGet(options) {
 
           let body = ''
           response.setEncoding('utf8')
-          response.on('data', (chunk) => (body += chunk))
+          response.on('data', (chunk) => {
+            body += chunk
+            if (body.length <= MAX_BODY_BYTES) return
+            // Cut off rather than truncated: a reply this size means the other end is not
+            // what it is supposed to be, and half of it is not worth acting on.
+            request.destroy()
+            finish(reject, new Error(`Reply larger than ${MAX_BODY_BYTES} bytes: ${path}`))
+          })
           response.on('end', () => finish(resolve, body))
         }
       )

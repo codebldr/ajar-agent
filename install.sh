@@ -10,8 +10,9 @@
 #
 # Either of these works:
 #
-#   sh install.sh                                    from a copy of this directory
-#   curl -fsSL https://ajar.sh/install | sh          from nothing at all
+#   sh install.sh            from a copy of this directory
+#   curl -fsSL https://raw.githubusercontent.com/romeoonisim/ajar-agent/main/install.sh | sh
+#                            from nothing at all
 #
 # It touches nothing outside the install directory, the configuration directory, and one
 # service file.
@@ -93,19 +94,31 @@ say "Installed to $INSTALL_DIR"
 # Interactive, and deliberately so: this is where somebody types the intercom's password, and
 # it is the only thing the agent cannot work out for itself.
 
+# The answers are written to the home directory of whoever runs the setup, and read back by
+# whoever the service runs as. Installed with `sudo sh`, those are two different people — root
+# answers the questions, and the service starts as the user who typed sudo and finds nothing.
+# So the setup is run as the user the service will run as, and the two agree by construction.
+run_setup() {
+  if [ "$(id -u)" = 0 ] && [ "$RUN_AS" != root ]; then
+    su "$RUN_AS" -c "$NODE_BIN $INSTALL_DIR/agent.mjs --setup"
+  else
+    "$NODE_BIN" "$INSTALL_DIR/agent.mjs" --setup
+  fi
+}
+
 if [ "${AJAR_SKIP_SETUP:-}" = 1 ]; then
   say "Skipping setup (AJAR_SKIP_SETUP=1)"
 elif [ -t 0 ]; then
   say ""
-  "$NODE_BIN" "$INSTALL_DIR/agent.mjs" --setup
+  run_setup
 elif [ -r /dev/tty ]; then
   # Piped through sh, this script *is* standard input, so the setup questions would be answered
   # by whatever is left of it. The terminal is still there; it just has to be asked for.
   say ""
-  "$NODE_BIN" "$INSTALL_DIR/agent.mjs" --setup < /dev/tty
+  run_setup < /dev/tty
 else
   say ""
-  say "No terminal to ask questions with. Finish the setup yourself with:"
+  say "No terminal to ask questions with. Finish the setup yourself, as $RUN_AS, with:"
   say "  $NODE_BIN $INSTALL_DIR/agent.mjs --setup"
   AJAR_SKIP_SERVICE=1
 fi
@@ -150,6 +163,12 @@ install_launchd() {
   logs=$HOME/Library/Logs
 
   mkdir -p "$(dirname "$plist")" "$logs"
+
+  # The log carries pairing codes, and a pairing code is a key to the gate for ten minutes.
+  # Created here rather than left to launchd, which would make it readable by every account on
+  # the machine.
+  [ -f "$logs/ajar-agent.log" ] || : > "$logs/ajar-agent.log"
+  chmod 600 "$logs/ajar-agent.log"
 
   cat > "$plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

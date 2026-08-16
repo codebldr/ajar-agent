@@ -7,21 +7,58 @@ the camera when somebody wants to look, opens the gate when you ask, and carries
 to whoever is standing at it. The phone app talks to this; it never talks to your intercom
 directly, and it never learns your intercom's password.
 
-It runs on anything already switched on in the house: a Raspberry Pi, a NAS, a Home Assistant
-box, an old laptop.
+It runs on anything already switched on in the house: a
+[Raspberry Pi](docs/install/raspberry-pi.md), a [NAS](docs/install/nas.md), a
+[Home Assistant](docs/install/home-assistant.md) box, a [Mac](docs/install/mac.md), or
+[Docker](docs/install/docker.md) on whatever else you have.
 
 ## Installing
 
+**Pick the machine you have.** Each guide stands on its own — the commands to copy, the
+questions you will be asked, and what to do when it does not work.
+
+| Where it runs | | How it goes in |
+|---|---|---|
+| Raspberry Pi, and any Linux | **[Install guide →](docs/install/raspberry-pi.md)** | one command, then a service that survives a power cut |
+| NAS — Synology, QNAP, Unraid, Asustor | **[Install guide →](docs/install/nas.md)** | Docker, with the clicking for each brand |
+| Home Assistant | **[Install guide →](docs/install/home-assistant.md)** | an add-on — this repository is its store |
+| Docker, anywhere else | **[Install guide →](docs/install/docker.md)** | `docker run`, or compose |
+| Mac | **[Install guide →](docs/install/mac.md)** | one command; good for trying it out |
+| Anything else | **[Install guide →](docs/install/manual.md)** | `node agent.mjs`, no service, nothing installed |
+
+Moving it from one machine to another later: **[here](docs/install/moving.md)**. Stop the old one
+first — two agents on the same intercom knock each other off in a loop.
+
+### The short version, on a Pi
+
 ```sh
-curl -fsSL https://ajar.sh/install | sh
+curl -fsSL https://raw.githubusercontent.com/romeoonisim/ajar-agent/main/install.sh | sudo sh
 ```
 
-For a NAS, Home Assistant, or the longer version of any of it, see
-**[docs/INSTALL.md](docs/INSTALL.md)**.
+It asks for the intercom's password, then prints a **six-digit pairing code**. Type that into the
+Ajar app and you are done. To see it again later:
+
+```sh
+sudo journalctl -u ajar-agent -f
+```
+
+### The short version, in Docker
+
+Both flags matter: without them the agent cannot find your intercom, and it forgets its settings
+on every update.
+
+```sh
+git clone https://github.com/romeoonisim/ajar-agent.git
+cd ajar-agent
+docker build -t ajar-agent .
+docker run -d --name ajar --network host --restart unless-stopped \
+  -v ajar-config:/config -e VTO_PASSWORD='your-intercom-password' ajar-agent
+docker logs -f ajar
+```
 
 The only thing you need to hand is **your intercom's password** — the one its own web page asks
 for. The agent finds the intercom on your network by itself, and asks the intercom for its serial
-number rather than making you find the sticker.
+number rather than making you find the sticker. `node agent.mjs --help` lists the flags.
 
 ## What it needs
 
@@ -67,6 +104,22 @@ device actually emits when a doorbell is pressed, the channel numbering, how it 
 a router, and the security reasoning behind every trust decision in here. All measured against
 real hardware rather than taken from a manual.
 
+## Security
+
+Found something? **[SECURITY.md](SECURITY.md)** says where to send it, and — worth reading first
+— what the agent trusts, what it does not, and which weaknesses are known and accepted.
+
+The parts a stranger can knock on have tests, and they need nothing installed:
+
+```sh
+node --test "tests/*.test.mjs"
+```
+
+They cover the house network server — the key, the size ceilings, the connection cap, and the
+rekey that a revoked phone must not survive — and the WebSocket handshake. Every one of those
+limits looks like paranoia until it is removed, which is why they are written down as tests
+rather than left as comments.
+
 ## Privacy
 
 The agent holds your intercom's password on your own machine, in
@@ -77,3 +130,10 @@ the way.
 ## Status
 
 Early. It runs a real house every day, which is a different thing from being finished.
+
+## Licence
+
+**[Apache License 2.0](LICENSE)** — do what you like with it, including commercially. The parts
+worth knowing: it grants you a patent licence from everyone who contributed, it does not hand you
+the Ajar name along with the code, and it comes with no warranty of any kind. That last one is not
+a formality when the software opens a gate.

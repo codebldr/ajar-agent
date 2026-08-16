@@ -112,6 +112,11 @@ function parseReply(message, from) {
     // What the device says about itself is preferred over where the packet came from: they
     // differ when a router has rewritten the source address on the way here.
     host: device.IPv4Address?.IPAddress || from,
+    // Kept beside it, because the two disagreeing is worth seeing. Discovery is unauthenticated
+    // — anything on the network can answer this claiming to be an intercom, and the setup that
+    // follows types the intercom's password into whatever was chosen. A packet whose source is
+    // not the address it names deserves a second look before that happens.
+    from,
     httpPort: Number(device.HttpPort ?? 80),
     version: device.Version ?? '',
     mac: device.mac ?? info.mac ?? '',

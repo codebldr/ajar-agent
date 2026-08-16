@@ -18,6 +18,16 @@ const KEEPALIVE_MS = 25_000
 const MAGIC = 0x24
 
 /**
+ * How much unread text the other end may leave sitting here.
+ *
+ * Media frames carry their own length and cannot exceed 64 kB by definition. RTSP text does
+ * not: a reply with no end of headers, or a `Content-Length` of a gigabyte, would have this
+ * buffer grow until the machine gave up. The largest real reply is the SDP, at under a
+ * kilobyte.
+ */
+const MAX_TEXT_BYTES = 256 * 1024
+
+/**
  * Opens a stream and calls back with reassembled H.264 access units.
  *
  * `onVideo({ data, keyframe, timestamp })` receives Annex-B bytes, which is what Android's
@@ -140,11 +150,21 @@ export function openStream(options) {
       }
 
       const headerEnd = buffer.indexOf('\r\n\r\n')
-      if (headerEnd === -1) return
+      if (headerEnd === -1) {
+        // No end of headers in sight and the buffer already past anything real: the other end
+        // is not speaking RTSP, and waiting costs memory for nothing.
+        if (buffer.length > MAX_TEXT_BYTES) fail(new Error('RTSP reply with no end of headers'))
+        return
+      }
 
       const head = buffer.subarray(0, headerEnd).toString('utf8')
       const response = parseResponse(head)
       const bodyLength = Number(response.headers['content-length'] ?? 0)
+
+      if (!Number.isFinite(bodyLength) || bodyLength < 0 || bodyLength > MAX_TEXT_BYTES) {
+        return fail(new Error(`RTSP reply claimed ${bodyLength} bytes of body`))
+      }
+
       const total = headerEnd + 4 + bodyLength
       if (buffer.length < total) return
 

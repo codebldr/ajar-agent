@@ -106,8 +106,18 @@ function ensureAgentSecret() {
 }
 
 /**
+ * The house network server, once it exists.
+ *
+ * Held here rather than passed around because the Worker link is built before it and still has
+ * to reach it: a key rotation arrives on that socket and has to change the lock on this one.
+ */
+let localServer = null
+
+/**
  * Kept across restarts rather than minted per run: a phone holding yesterday's key would be
  * turned away at the door of a house it is still paired with, for no reason it could see.
+ *
+ * Replaced only when somebody is removed from the device — see `rotate-local-key`.
  */
 function ensureLocalKey() {
   if (config.localKey) return
@@ -135,6 +145,29 @@ const explicitTargets = process.argv
   .filter((argument) => argument.startsWith('--target='))
   .map((argument) => argument.slice('--target='.length))
   .filter(Boolean)
+
+/**
+ * Printed rather than pointed at a manual, because the moment somebody needs this is the moment
+ * they are on a NAS over SSH with no browser to hand.
+ */
+if (process.argv.includes('--help') || process.argv.includes('-h')) {
+  console.log(`Ajar agent — your Dahua intercom, on your phone, from anywhere.
+
+  node agent.mjs             run it
+  node agent.mjs --setup     ask for the intercom and the password again
+  node agent.mjs --discover  list the intercoms on this network, then stop
+  node agent.mjs --watch     print intercom events without touching the Worker
+  node agent.mjs --target=192.168.1.50
+                             look at an address directly, for an intercom behind a second router
+
+Settings live in ${CONFIG_PATH}, readable by you alone. Environment variables win over it:
+VTO_HOST, VTO_PORT, VTO_USERNAME, VTO_PASSWORD, DEVICE_ID, WORKER_URL, AGENT_SECRET,
+RTSP_PORT, CAMERA_CHANNEL, AJAR_CONFIG.
+
+The six-digit pairing code is printed when the agent connects. It lasts ten minutes; restart
+the agent for another. Installing: https://github.com/romeoonisim/ajar-agent`)
+  process.exit(0)
+}
 
 /**
  * Which intercom events mean what. Dahua's codes vary by model and firmware, so these are
@@ -340,15 +373,7 @@ class WorkerLink {
       // Where to find this machine on the house network, and what to say at the door. The
       // Worker passes both only to phones already paired with this device, so a phone at
       // home can take the short way to the camera instead of paying for the long one.
-      const addresses = localAddresses()
-      if (addresses.length > 0) {
-        this.send({
-          type: 'local',
-          addresses,
-          port: LOCAL_PORT,
-          key: config.localKey,
-        })
-      }
+      this.#announceLocal()
     })
 
     socket.addEventListener('message', (event) => {
@@ -361,7 +386,14 @@ class WorkerLink {
         }
         return
       }
-      void this.#handle(JSON.parse(event.data))
+      // Parsed inside the try because this runs on the socket's own data event: anything that
+      // throws here is an uncaught exception, and an uncaught exception is a doorbell that
+      // stops working until somebody notices. One malformed frame is not worth the house.
+      try {
+        void this.#handle(JSON.parse(event.data))
+      } catch (error) {
+        log(`worker: ignoring a message that made no sense — ${error.message}`)
+      }
     })
 
     socket.addEventListener('close', (event) => {
@@ -406,7 +438,11 @@ class WorkerLink {
       }, PAIR_REQUEST_TIMEOUT_MS)
 
       this.#pairWaiting.push({ resolve, timer })
-      this.send({ type: 'pair-request' })
+      // Said out loud: this code is going to a phone that reached the agent across the house
+      // network, not to somebody reading it off the screen of the machine it runs on. The
+      // Worker treats the two differently — a code handed out this way joins a household
+      // rather than taking it over.
+      this.send({ type: 'pair-request', via: 'local' })
     })
   }
 
@@ -437,6 +473,14 @@ class WorkerLink {
     // ringing — the two halves of what answering means.
     if (message.type === 'call-answered') {
       if (callInProgress) await endCallAtGate()
+      return
+    }
+
+    // Somebody was removed from this device, or it changed hands. The key that gets a phone in
+    // over the house network is replaced, because revoking upstairs cannot reach a phone that
+    // already holds it — nothing upstairs stands between that phone and this machine.
+    if (message.type === 'rotate-local-key') {
+      this.#rekeyLocal()
       return
     }
 
@@ -483,6 +527,34 @@ class WorkerLink {
       log(`gate: failed — ${error.message}`)
       this.send({ type: 'ack', reqId: message.reqId, ok: false, error: error.message })
     }
+  }
+
+  /**
+   * Cuts a new house key and tells the Worker about it.
+   *
+   * The order matters: the key is written to disk before it is announced, so a machine that
+   * loses power between the two comes back with the key it handed out rather than one nobody
+   * knows. Announced only after the local server has taken it, for the same reason in the
+   * other direction.
+   */
+  #rekeyLocal() {
+    config.localKey = randomBytes(32).toString('base64url')
+    writeConfig({ localKey: config.localKey })
+    localServer?.rekey(config.localKey)
+    this.#announceLocal()
+  }
+
+  /** Where this machine can be reached on the house network, and what to say at that door. */
+  #announceLocal() {
+    const addresses = localAddresses()
+    if (addresses.length === 0) return
+
+    this.send({
+      type: 'local',
+      addresses,
+      port: LOCAL_PORT,
+      key: config.localKey,
+    })
   }
 
   send(payload) {
@@ -713,14 +785,22 @@ let callInProgress = false
  * mystery when nobody at the gate hears anything.
  */
 async function endCallAtGate() {
+  callInProgress = false
+
+  let rpc
   try {
-    const rpc = await new Rpc({
+    rpc = await new Rpc({
       host: config.host,
       port: config.port,
       username: config.username,
       password: config.password,
     }).login()
+  } catch (error) {
+    log(`talk: could not reach the intercom to hang up — ${error.message}`)
+    return
+  }
 
+  try {
     const instance = await rpc.call('VideoTalkPhone.factory.instance')
     const phone = instance.result
 
@@ -729,16 +809,26 @@ async function endCallAtGate() {
     // the intercom's own thirty second timeout kept firing afterwards, which is what a call
     // that was never cancelled looks like.
     const before = await rpc.call('VideoTalkPhone.getCallState', null, phone)
-    const result = await rpc.call('VideoTalkPhone.endCall', null, phone)
+    await rpc.call('VideoTalkPhone.endCall', null, phone)
     const after = await rpc.call('VideoTalkPhone.getCallState', null, phone)
 
-    callInProgress = false
-    log(
-      `talk: endCall ${JSON.stringify(result.result)}` +
-        ` — state ${before.params?.callState ?? '?'} → ${after.params?.callState ?? '?'}`
-    )
+    const state = after.params?.callState
+    log(`talk: hung up — state ${before.params?.callState ?? '?'} → ${state ?? '?'}`)
+
+    if (state === 'Idle') return
   } catch (error) {
-    log(`talk: could not end the call at the gate — ${error.message}`)
+    log(`talk: VideoTalkPhone would not hang up — ${error.message}`)
+  }
+
+  // The other way, for the models where the first one is missing or does nothing. Dahua's own
+  // console takes `hc` for hang call, and it is what the widely used Home Assistant integration
+  // uses on everything from a VTO2000 to a VTO9541D — which makes it the more portable of the
+  // two, even though this intercom is happy with the first.
+  try {
+    const hung = await rpc.call('console.runCmd', { command: 'hc' })
+    log(`talk: hung up through the console instead — ${JSON.stringify(hung.result)}`)
+  } catch (error) {
+    log(`talk: the console would not hang up either — ${error.message}`)
   }
 }
 
@@ -888,6 +978,15 @@ async function findIntercoms() {
 function describe(device) {
   const parts = [device.model || device.deviceClass || 'device', device.host]
   if (device.serial) parts.push(device.serial)
+
+  // Nothing on this network had to prove anything to appear on this list, and the next question
+  // asks for the intercom's password. A reply that names an address other than the one it came
+  // from is the shape a machine pretending to be an intercom takes, so it is said out loud
+  // rather than quietly preferred.
+  if (device.from && device.from !== device.host) {
+    parts.push(`(answered from ${device.from} — check this is your intercom)`)
+  }
+
   return parts.join('  ')
 }
 
@@ -1126,6 +1225,35 @@ async function configureHeadless() {
 // ── Start ────────────────────────────────────────────────────────────────
 
 
+/**
+ * Refuses to carry the agent's secret over anything but TLS.
+ *
+ * The secret rides in a header on the way up, and the agent it identifies can open a front
+ * gate. A `WORKER_URL` typed with `http` rather than `https` — a development address left in a
+ * container, a copied command — would put that on the wire in clear, and nothing would say so.
+ * Localhost is let through: there is no network to listen on, and that is where the Worker runs
+ * while somebody is working on it.
+ */
+function requireEncryptedWorker(workerUrl) {
+  let url
+  try {
+    url = new URL(workerUrl)
+  } catch {
+    console.error(`WORKER_URL is not an address: ${workerUrl}`)
+    process.exit(1)
+  }
+
+  const encrypted = url.protocol === 'https:' || url.protocol === 'wss:'
+  const loopback =
+    url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1'
+
+  if (encrypted || loopback) return
+
+  console.error(`WORKER_URL must be https, not ${url.protocol.replace(':', '')}.`)
+  console.error("The agent's secret travels on that connection; it cannot go in the clear.")
+  process.exit(1)
+}
+
 async function main() {
 
   if (discoverOnly) {
@@ -1149,6 +1277,7 @@ async function main() {
       console.error('WORKER_URL is required (or pass --watch).')
       process.exit(1)
     }
+    requireEncryptedWorker(config.workerUrl)
     ensureAgentSecret()
     ensureLocalKey()
   }
@@ -1157,7 +1286,7 @@ async function main() {
   // standing in the hallway should see the gate even on a day the internet is down.
   const link = watchOnly ? null : new WorkerLink()
 
-  const local = watchOnly
+  localServer = watchOnly
     ? null
     : new LocalServer({
         key: config.localKey,
@@ -1168,7 +1297,7 @@ async function main() {
         onPair: () => link.requestPairingCode(),
         log,
       })
-  local?.start()
+  localServer?.start()
 
   // Only useful to a phone that has not paired yet, which is the one case where nothing else
   // can tell it where to look.
@@ -1226,4 +1355,9 @@ async function main() {
   }
 }
 
-main()
+// Anything reaching here has already been through every retry the agent has. Said plainly and
+// then out, rather than dying with a stack trace nobody reads and an exit code that says fine.
+main().catch((error) => {
+  console.error(`\nThe agent stopped: ${error.message}`)
+  process.exit(1)
+})

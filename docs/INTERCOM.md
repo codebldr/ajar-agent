@@ -54,6 +54,29 @@ the machine, a stronger claim than the code itself, so somebody else's guessing 
 owner locked out. A second limit counts attempts per source address, so nobody can work through
 serial numbers from one place.
 
+**A code handed out over the house network joins a household; it does not take it over.** The
+agent says which of the two a code is when it asks for one, and the Worker remembers it beside
+the code. Ownership — the right to share, revoke and hand over — comes only from a code read off
+the screen of the machine the agent runs on, which needs somebody standing at it. A device that
+nobody owns yet is the exception: the first phone through becomes the owner however it paired,
+because otherwise a fresh installation could never finish.
+
+**The house key changes when somebody is removed.** A phone at home does not talk to the Worker
+at all — it goes straight to this machine with a key the agent handed out — so revoking access
+upstairs cannot reach it. Removing a person, or letting go of the device from a phone while
+others keep it, has the agent cut a new key and drop everyone watching. The phones still
+entitled to one ask where the agent is before every connection and collect it then.
+
+**The beacon answers private addresses only, and a handful a second.** It replies to a five byte
+question with sixty bytes, which is the shape of a reflection attack: answering a forged address
+would make this machine a weapon pointed at a stranger. Carrier-grade NAT (100.64/10) counts as
+public here, because that is the mobile network.
+
+**Discovery is unauthenticated in both directions.** Anything on the network can answer a search
+claiming to be an intercom, and the setup that follows types the intercom's password into
+whatever was chosen. The list shows the address a reply actually came from whenever it differs
+from the one the reply claims. Worth a second look when it does.
+
 **Give the agent its own intercom account.** It needs to open doors and read events, not to
 administer the device. The agent authenticates as whatever `username` says, so `admin` is a
 default rather than a requirement. If the config file is ever stolen, the damage stops at the

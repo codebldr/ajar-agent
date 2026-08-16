@@ -26,6 +26,44 @@ const KEEPALIVE_MS = 25_000
 /** 20 ms of audio per packet: small enough to stay conversational, large enough to be cheap. */
 const PACKET_MS = 20
 
+/** What the phone records at, always. Tracks that want less are fed by averaging down to it. */
+const SOURCE_RATE = 16_000
+
+/**
+ * G.711 A-law, which is what most of these door stations ask for even though this one does not.
+ *
+ * Straight from the standard's table rather than approximated: silence encodes to `0xD5`, the
+ * extremes to `0xAA` and `0x2A`, and every one of the sixty-five thousand possible inputs lands
+ * in a single byte. Checked against those values before it was allowed near a speaker facing a
+ * street, because a wrong table here is not quiet — it is noise at full volume.
+ */
+const SEGMENT_ENDS = [0x1f, 0x3f, 0x7f, 0xff, 0x1ff, 0x3ff, 0x7ff, 0xfff]
+
+function alawFrom(sample) {
+  let pcm = sample >> 3
+  let mask
+
+  if (pcm >= 0) {
+    mask = 0xd5
+  } else {
+    mask = 0x55
+    pcm = -pcm - 1
+  }
+
+  let segment = SEGMENT_ENDS.length
+  for (let index = 0; index < SEGMENT_ENDS.length; index += 1) {
+    if (pcm <= SEGMENT_ENDS[index]) {
+      segment = index
+      break
+    }
+  }
+
+  if (segment >= 8) return 0x7f ^ mask
+
+  const value = (segment << 4) | (segment < 2 ? (pcm >> 1) & 0x0f : (pcm >> segment) & 0x0f)
+  return value ^ mask
+}
+
 const HANDSHAKE_TIMEOUT_MS = 8_000
 
 /**
@@ -185,6 +223,16 @@ export async function openBackchannel(options) {
     const track = findSendonlyTrack(described.body)
     if (!track) throw new Error('this intercom offers no talk track')
 
+    // Two codecs, because Dahua does not agree with itself about which one a door station
+    // wants. This one asks for L16; the models people write about online mostly ask for PCMA.
+    // Anything else is refused by name, so whoever meets it knows what to add.
+    const codec = (track.codec ?? 'L16').toUpperCase()
+    if (codec !== 'L16' && codec !== 'PCMA') {
+      throw new Error(
+        `this intercom wants ${track.codec} on its talk track; only L16 and PCMA are implemented`
+      )
+    }
+
     const setup = await request(
       'SETUP',
       {
@@ -241,8 +289,12 @@ function findSendonlyTrack(sdp) {
     if (!current) continue
 
     if (line.startsWith('a=rtpmap:')) {
-      const rate = Number(line.split('/')[1])
-      if (Number.isFinite(rate)) current.rate = rate
+      // `a=rtpmap:97 L16/16000` — the name matters as much as the rate. Only the rate was read
+      // here at first, which meant a device answering G.711 would have been sent byte-swapped
+      // PCM as though it were A-law: full volume noise out of a speaker facing a street.
+      const [name, rate] = line.split(' ')[1]?.split('/') ?? []
+      if (name) current.codec = name
+      if (Number.isFinite(Number(rate))) current.rate = Number(rate)
       continue
     }
 
@@ -267,8 +319,10 @@ class Speaker {
   #isClosed
 
   #payloadType
+  #codec
   #packetBytes
   #packetSamples
+  #step
 
   #pending = Buffer.alloc(0)
   #sequence = 0
@@ -283,8 +337,14 @@ class Speaker {
     this.#isClosed = isClosed
 
     this.#payloadType = track.payloadType
+    this.#codec = (track.codec ?? 'L16').toUpperCase()
     this.#packetSamples = Math.round((track.rate * PACKET_MS) / 1000)
-    this.#packetBytes = this.#packetSamples * 2
+
+    // The phone always records at sixteen thousand samples a second. A track that wants eight
+    // thousand — which is every PCMA one — needs two input samples for each it sends, so the
+    // amount of input a packet consumes is not the same as the amount it carries.
+    this.#step = Math.max(1, Math.round(SOURCE_RATE / track.rate))
+    this.#packetBytes = this.#packetSamples * this.#step * 2
 
     // A different SSRC each time would be tidier, but the number only has to be stable within
     // one session and unremarkable to the camera.
@@ -302,13 +362,39 @@ class Speaker {
     this.#pending = this.#pending.length === 0 ? pcm : Buffer.concat([this.#pending, pcm])
 
     while (this.#pending.length >= this.#packetBytes) {
-      const slice = Buffer.from(this.#pending.subarray(0, this.#packetBytes))
+      const slice = this.#pending.subarray(0, this.#packetBytes)
       this.#pending = this.#pending.subarray(this.#packetBytes)
-
-      // L16 is defined in network order; the phone records the other way round.
-      slice.swap16()
-      this.#sendPacket(slice)
+      this.#sendPacket(this.#encode(slice))
     }
+  }
+
+  /**
+   * One packet of the phone's microphone, in whatever this intercom asked for.
+   *
+   * Where the track runs slower than the phone records, samples are averaged in pairs rather
+   * than thrown away. Dropping every other one folds the high end back down as a whistle,
+   * which on a voice is worse than the roughness it saves.
+   */
+  #encode(slice) {
+    const alaw = this.#codec === 'PCMA'
+    const out = Buffer.alloc(this.#packetSamples * (alaw ? 1 : 2))
+
+    for (let index = 0; index < this.#packetSamples; index += 1) {
+      let sum = 0
+      for (let tap = 0; tap < this.#step; tap += 1) {
+        sum += slice.readInt16LE((index * this.#step + tap) * 2)
+      }
+      const sample = Math.round(sum / this.#step)
+
+      if (alaw) {
+        out[index] = alawFrom(sample)
+      } else {
+        // L16 is defined in network order; the phone records the other way round.
+        out.writeInt16BE(sample, index * 2)
+      }
+    }
+
+    return out
   }
 
   #sendPacket(payload) {

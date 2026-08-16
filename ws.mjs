@@ -10,9 +10,22 @@
 // surface deliberately mirrors the browser's, so the rest of the agent cannot tell which one
 // it is holding.
 
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
+
+/** RFC 6455 section 1.3. The constant every WebSocket server hashes the key with. */
+const HANDSHAKE_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
+
+/**
+ * The largest frame worth reading.
+ *
+ * Everything that arrives here is a small JSON message or a slice of somebody's voice. The
+ * protocol allows a length of nearly nine exabytes, and a server that sent one would have this
+ * buffer grow until the machine died. Ours never will; the point is that a broken or hostile
+ * one cannot either.
+ */
+const MAX_FRAME_BYTES = 8 * 1024 * 1024
 
 /**
  * How often to prod the other end, and how long to wait before giving up on it.
@@ -82,14 +95,15 @@ export class WebSocketClient {
     })
 
     outgoing.on('upgrade', (response, socket, head) => {
-      // The server proves it understood the handshake by hashing the key back at us. That
-      // proof is checked for presence rather than recomputed: its purpose is to stop a
-      // caching proxy or a plain HTTP server from being talked into an upgrade it does not
-      // understand, and this connection is TLS to a hostname we own, carrying a protocol only
-      // our own Worker speaks. Recomputing it would add a constant to get wrong, not safety.
-      if (!response.headers['sec-websocket-accept']) {
+      // The server proves it understood the handshake by hashing our key back at us. Checked
+      // rather than glanced at: it is what stops a caching proxy, or a plain HTTP server with
+      // an opinion, from being talked into an upgrade neither end meant — and the agent's
+      // secret has already left in the request that got here.
+      const expected = createHash('sha1').update(key + HANDSHAKE_GUID).digest('base64')
+
+      if (response.headers['sec-websocket-accept'] !== expected) {
         socket.destroy()
-        this.#fail(new Error('WebSocket upgrade had no accept header'))
+        this.#fail(new Error('WebSocket upgrade answered with the wrong key'))
         return
       }
 
@@ -272,12 +286,18 @@ export class WebSocketClient {
       if (buffer.length < offset + 8) return null
       const big = buffer.readBigUInt64BE(offset)
       // Anything this large is a bug at the other end, not a doorbell.
-      if (big > BigInt(Number.MAX_SAFE_INTEGER)) {
+      if (big > BigInt(MAX_FRAME_BYTES)) {
         this.#fail(new Error('WebSocket frame too large'))
         return null
       }
       length = Number(big)
       offset += 8
+    }
+
+    // Reached by the two-byte form as well, so one ceiling covers every way a length arrives.
+    if (length > MAX_FRAME_BYTES) {
+      this.#fail(new Error('WebSocket frame too large'))
+      return null
     }
 
     // A server must not mask, but reading it costs nothing and refusing would be brittle.
@@ -317,9 +337,17 @@ export class WebSocketClient {
         return
       }
 
-      case OPCODE.continuation:
+      case OPCODE.continuation: {
+        // A message split into pieces has no length of its own, so the ceiling that guards a
+        // single frame guards nothing here without this.
+        const held = this.#fragments.reduce((total, part) => total + part.length, 0)
+        if (held + frame.payload.length > MAX_FRAME_BYTES) {
+          this.#fail(new Error('WebSocket message too large'))
+          return
+        }
         this.#fragments.push(frame.payload)
         break
+      }
 
       default:
         // A new message. Text and binary are the only two that start one.

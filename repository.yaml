@@ -1,0 +1,12 @@
+# This repository is also a Home Assistant add-on repository.
+#
+# Home Assistant looks for this file at the root, then for every folder beside it that holds a
+# `config.yaml` — here, `ha-addon`. Nothing else in the repository concerns it.
+#
+# Somebody adds it once, under Settings → Add-ons → Add-on Store → ⋮ → Repositories, with the
+# address of this repository. Ajar then appears alongside the official add-ons, installs with a
+# button, and updates when the `version` in ha-addon/config.yaml goes up. That is a great deal
+# less than asking somebody to copy a folder over SSH.
+name: Ajar
+url: https://github.com/romeoonisim/ajar-agent
+maintainer: Romeo Onisim <5269394+romeoonisim@users.noreply.github.com>

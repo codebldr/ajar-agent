@@ -1,0 +1,11 @@
+Ajar agent
+Copyright 2026 Romeo Onisim
+
+This product includes software developed for the Ajar project
+(https://github.com/romeoonisim/ajar-agent).
+
+Licensed under the Apache License, Version 2.0. See LICENSE for the terms.
+
+Nothing here is built on anybody else's code: the agent has no dependencies, and the WebSocket
+client, the RTSP client, the digest authentication and the device discovery are all written out
+in this repository.
