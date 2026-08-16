@@ -21,6 +21,7 @@ import { homedir } from 'node:os'
 import { createInterface } from 'node:readline/promises'
 
 import { openBackchannel } from './backchannel.mjs'
+import { Rpc } from './rpc.mjs'
 import { digestGet } from './digest.mjs'
 import { discover, isIntercom } from './discover.mjs'
 import { LocalServer, LOCAL_PORT, localAddresses, startBeacon } from './local.mjs'
@@ -431,6 +432,14 @@ class WorkerLink {
       return
     }
 
+    // Somebody picked up in the app. Hanging up at the intercom is what frees the gate
+    // speaker for them to be heard through, and what stops every other screen in the house
+    // ringing — the two halves of what answering means.
+    if (message.type === 'call-answered') {
+      if (callInProgress) await endCallAtGate()
+      return
+    }
+
     if (message.type === 'stream-start') {
       audience.add(this.#sink)
       return
@@ -464,6 +473,12 @@ class WorkerLink {
       const elapsedMs = Date.now() - startedAt
       log(`gate: opened channel ${message.channelId} in ${elapsedMs}ms`)
       this.send({ type: 'ack', reqId: message.reqId, ok: true, elapsedMs })
+
+      // Letting somebody in is an answer. Leaving the intercom ringing after it would have
+      // the house chiming at a visitor already walking up the path, until the device gives up
+      // on its own half a minute later. Only when a call is actually in progress — opening
+      // the gate on the way home should disturb nothing.
+      if (callInProgress) await endCallAtGate()
     } catch (error) {
       log(`gate: failed — ${error.message}`)
       this.send({ type: 'ack', reqId: message.reqId, ok: false, error: error.message })
@@ -687,6 +702,46 @@ class Camera {
  * ONVIF talk track has neither problem: no call, no ringing, and the speaker plays whatever is
  * written to it. See `backchannel.mjs`.
  */
+/** Whether the intercom is ringing or in a call, tracked from its own event channel. */
+let callInProgress = false
+
+/**
+ * Hangs up whatever call the intercom has, so the speaker is free to be spoken through.
+ *
+ * Best effort on purpose: if this fails the talk channel is still opened, because a voice that
+ * might not be heard is worth more than refusing to try. The failure is logged so it is not a
+ * mystery when nobody at the gate hears anything.
+ */
+async function endCallAtGate() {
+  try {
+    const rpc = await new Rpc({
+      host: config.host,
+      port: config.port,
+      username: config.username,
+      password: config.password,
+    }).login()
+
+    const instance = await rpc.call('VideoTalkPhone.factory.instance')
+    const phone = instance.result
+
+    // Read on both sides of the hang-up rather than announcing success. An earlier version of
+    // this line claimed the house had stopped ringing, which nothing here had checked — and
+    // the intercom's own thirty second timeout kept firing afterwards, which is what a call
+    // that was never cancelled looks like.
+    const before = await rpc.call('VideoTalkPhone.getCallState', null, phone)
+    const result = await rpc.call('VideoTalkPhone.endCall', null, phone)
+    const after = await rpc.call('VideoTalkPhone.getCallState', null, phone)
+
+    callInProgress = false
+    log(
+      `talk: endCall ${JSON.stringify(result.result)}` +
+        ` — state ${before.params?.callState ?? '?'} → ${after.params?.callState ?? '?'}`
+    )
+  } catch (error) {
+    log(`talk: could not end the call at the gate — ${error.message}`)
+  }
+}
+
 class Talkback {
   #speaker = null
   #opening = false
@@ -697,6 +752,14 @@ class Talkback {
     this.#opening = true
 
     try {
+      // A call owns the gate speaker. Anything written to the talk channel while one is up is
+      // held back and played once it ends, which is worse than useless — the visitor hears an
+      // answer to a question they asked a minute ago. So speaking takes the call over.
+      //
+      // That also stops every screen in the house ringing, which is what a person means when
+      // they pick up: I am dealing with this.
+      if (callInProgress) await endCallAtGate()
+
       this.#speaker = await openBackchannel({
         host: config.host,
         port: config.rtspPort,
@@ -1138,7 +1201,19 @@ async function main() {
         // code is invisible otherwise, and that is exactly what needs finding.
         log(`event ${event.code} action=${event.action}${kind ? `  → ${kind}` : ''}`)
 
-        if (!kind || !link) return
+        // Remembered because the gate speaker belongs to a call while one is up, and what
+        // the agent writes to the talk channel then is not heard until it ends. Knowing a
+        // call is in progress is what lets talking take it over — see `Talkback.start`.
+        // One press, two events: this intercom emits `CallNoAnswered` and `Invite` five
+        // milliseconds apart, and both mean the same doorbell. Sent up as they arrive, they
+        // become two notifications on the phone for one visitor. The second is dropped rather
+        // than de-duplicated upstairs, because only this end knows they are the same press.
+        const duplicateRing = kind === 'ring' && callInProgress
+
+        if (kind === 'ring') callInProgress = true
+        if (kind === 'cancelled' || kind === 'gate_opened') callInProgress = false
+
+        if (!kind || !link || duplicateRing) return
         link.send({ type: kind, deviceId: config.deviceId, code: event.code })
       }, controller.signal)
 
