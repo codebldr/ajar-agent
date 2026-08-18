@@ -12,6 +12,13 @@ itself, and it is never away from the house when the doorbell rings.
   manufacturer's app account.
 - The Pi on the **same network as the intercom**, ideally on a cable.
 - Raspberry Pi OS, or any Linux. A Pi 3 is plenty; a Pi Zero 2 W works.
+- On wifi, the **2.4 GHz network**. A Pi 3 and a Pi Zero 2 W have no 5 GHz radio, and Raspberry
+  Pi Imager fills the wifi in for you from the network the computer writing the card is on —
+  which on a recent laptop is the 5 GHz one. The Pi then spends every boot looking for a network
+  it cannot see. Type the 2.4 GHz name in yourself.
+- A power supply that holds **5V at 2.5A**, and the short thick cable that came with something,
+  not the thin one from a drawer. Undervoltage does not announce itself; it throttles the board
+  and corrupts the card weeks later.
 
 ---
 
@@ -168,6 +175,30 @@ node /opt/ajar/agent.mjs --watch
 Press the doorbell and see what it prints. Those codes are settings, not code — `RING_CODES`,
 `ANSWER_CODES`, `CANCEL_CODES`, `GATE_CODES`. [Open an issue][issues] with what you saw and it
 will be built in.
+
+**The Pi never appears on the network at all.** On a Pi 3 or a Zero 2 W this is almost always the
+wifi band: Imager wrote the 5 GHz network the computer was on, and the Pi has no radio for it.
+Editing `network-config` on the card afterwards does not fix it — cloud-init has already run and
+will not redo the network, and changing `instance-id` does not persuade it either. Write the card
+again with the 2.4 GHz name typed by hand, or plug in a cable, which sidesteps the question.
+
+**It restarts by itself, or the card goes bad after a few weeks.** Ask the board:
+
+```sh
+vcgencmd get_throttled
+```
+
+`throttled=0x0` is the only good answer. Anything else is undervoltage, and the cable is a more
+common cause than the charger — a supply measured at 5V 3A still read `0x50005` through a thin
+micro USB cable and `0x0` through a thick one. The bits that matter: `0x1` is undervoltage now,
+`0x10000` is undervoltage at some point since boot.
+
+**The camera works from one phone and not another, in the same house.** Access points can be set
+to keep their clients apart. Two devices on the same `192.168.x.x` network, joined to different
+access points, then cannot reach each other at all — so a phone on the far access point loses the
+direct path to the agent and can only see the gate through the internet, which is slower and
+needs the connection to be up. Join both to the same access point to tell: if the camera comes
+back, that is the answer. A cable to the Pi ends it permanently.
 
 **Already running the agent on another machine?** Stop that one first — see
 [moving it](moving.md). Two agents on one intercom knock each other off in a loop.
