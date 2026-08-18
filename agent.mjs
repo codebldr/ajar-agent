@@ -114,6 +114,15 @@ function ensureAgentSecret() {
 let localServer = null
 
 /**
+ * The connection out to the Worker, once it exists.
+ *
+ * Module scope for the same reason as the server above: a phone on the house network can ask
+ * for something that has to travel upward — a test ring — and the handler for that runs long
+ * before `main` has finished building anything.
+ */
+let link = null
+
+/**
  * Kept across restarts rather than minted per run: a phone holding yesterday's key would be
  * turned away at the door of a house it is still paired with, for no reason it could see.
  *
@@ -814,21 +823,25 @@ async function endCallAtGate() {
 
     const state = after.params?.callState
     log(`talk: hung up — state ${before.params?.callState ?? '?'} → ${state ?? '?'}`)
-
-    if (state === 'Idle') return
   } catch (error) {
     log(`talk: VideoTalkPhone would not hang up — ${error.message}`)
   }
 
-  // The other way, for the models where the first one is missing or does nothing. Dahua's own
-  // console takes `hc` for hang call, and it is what the widely used Home Assistant integration
-  // uses on everything from a VTO2000 to a VTO9541D — which makes it the more portable of the
-  // two, even though this intercom is happy with the first.
+  // Both, always, and this is the correction of an earlier belief.
+  //
+  // `endCall` was treated as sufficient because it moves the intercom's own call state to Idle,
+  // which it does. But the indoor monitor kept ringing anyway, and the intercom's thirty second
+  // no-answer timer still fired afterwards — the signature of a call that was ended at this end
+  // and never cancelled at the other. `endCall` closes the talk session; the console's `hc`,
+  // hang call, is what the device itself does when somebody puts the handset down.
+  //
+  // It is also the more portable of the two: the widely used Home Assistant integration drives
+  // everything from a VTO2000 to a VTO9541D with it.
   try {
     const hung = await rpc.call('console.runCmd', { command: 'hc' })
-    log(`talk: hung up through the console instead — ${JSON.stringify(hung.result)}`)
+    log(`talk: hang call — ${JSON.stringify(hung.result)}`)
   } catch (error) {
-    log(`talk: the console would not hang up either — ${error.message}`)
+    log(`talk: the console would not hang up — ${error.message}`)
   }
 }
 
@@ -937,6 +950,22 @@ async function handleViewerMessage(message) {
     case 'talk-stop':
       talkback.stop()
       return
+
+    // A doorbell press that nobody had to walk to the gate to make.
+    //
+    // It reports a ring upward exactly as a real press does, so everything downstream of this
+    // machine is genuinely exercised: the Worker, the push, the notification, the sound, the
+    // screen. What it does not do is touch the intercom — no call is opened, so nothing sounds
+    // in the street and nothing rings on the screens inside the house.
+    //
+    // Only a phone that presented the house key can ask, which is the same standard as watching
+    // the camera. The worst somebody could do with it is make their own phone ring.
+    case 'test-ring':
+      if (!link) return
+      log('test: reporting a doorbell press that did not happen')
+      link.send({ type: 'ring', deviceId: config.deviceId, code: 'AjarTestRing' })
+      return
+
     case 'binary': {
       // Everything binary from a viewer is somebody talking; the first byte says so and the
       // rest goes straight to the gate.
@@ -1284,7 +1313,7 @@ async function main() {
 
   // Serving the house network is not conditional on the Worker being reachable: a phone
   // standing in the hallway should see the gate even on a day the internet is down.
-  const link = watchOnly ? null : new WorkerLink()
+  link = watchOnly ? null : new WorkerLink()
 
   localServer = watchOnly
     ? null
