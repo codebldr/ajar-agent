@@ -194,7 +194,7 @@ export class LocalServer {
           continue
         }
 
-        this.#relay(payload)
+        this.#relay(session, payload)
       }
     })
 
@@ -273,17 +273,20 @@ export class LocalServer {
   }
 
   /** Talking back, and asking for a different picture. The same words the Worker relays. */
-  #relay(payload) {
+  #relay(session, payload) {
     if (payload[0] === KIND_JSON) {
       try {
-        this.#onMessage(JSON.parse(payload.subarray(1).toString('utf8')))
+        // Handed the viewer's own way back as well as the message: most of what a phone asks
+        // for is broadcast to everyone watching, but a list of visits or a recording belongs
+        // to the phone that asked for it.
+        this.#onMessage(JSON.parse(payload.subarray(1).toString('utf8')), this.#sink(session))
       } catch {
         // A viewer that sends rubbish is ignored rather than disconnected: the stream is
         // worth more than the point.
       }
       return
     }
-    this.#onMessage({ type: 'binary', data: payload })
+    this.#onMessage({ type: 'binary', data: payload }, this.#sink(session))
   }
 
   #sink(session) {

@@ -24,6 +24,8 @@ import { openBackchannel } from './backchannel.mjs'
 import { Rpc } from './rpc.mjs'
 import { digestGet } from './digest.mjs'
 import { discover, isIntercom } from './discover.mjs'
+import { History } from './history.mjs'
+import { IntercomRecords, merge } from './records.mjs'
 import { LocalServer, LOCAL_PORT, localAddresses, startBeacon } from './local.mjs'
 import { openStream } from './rtsp.mjs'
 import { WebSocketClient as WebSocket } from './ws.mjs'
@@ -42,6 +44,17 @@ const DEFAULT_WORKER_URL = 'https://ajar-api.romeo-onisim.workers.dev'
 const CONFIG_PATH =
   process.env.AJAR_CONFIG ?? join(homedir(), '.config', 'ajar', 'agent.json')
 
+/**
+ * Where visits are kept: the index, the clips, the pictures.
+ *
+ * Beside the settings by default, which puts it in the right place on every installation
+ * without asking — a Pi writes to its own card, and a container writes to the folder its owner
+ * already mounted for the settings, which on a NAS is the big disk. Home Assistant is the one
+ * that needs telling: its add-on config folder is swept into every backup, so the add-on points
+ * this at `/media` instead, where large files belong and where Home Assistant can play them.
+ */
+const DATA_PATH = process.env.AJAR_DATA ?? join(dirname(CONFIG_PATH), 'history')
+
 const stored = readConfigFile(CONFIG_PATH)
 
 const config = {
@@ -56,6 +69,29 @@ const config = {
   localKey: stored.localKey ?? '',
   rtspPort: Number(process.env.RTSP_PORT ?? stored.rtspPort ?? 554),
   cameraChannel: Number(process.env.CAMERA_CHANNEL ?? stored.cameraChannel ?? 1),
+
+  // Set from the app rather than here, and kept so a restart does not forget what was chosen.
+  // The environment still wins, which is what the Home Assistant add-on needs: its own form is
+  // where those users expect to find settings, and it passes them in this way.
+  historyEnabled: envFlag(process.env.HISTORY_ENABLED) ?? stored.historyEnabled ?? true,
+  historySeconds: Number(process.env.HISTORY_SECONDS ?? stored.historySeconds ?? 0) || null,
+  historyMaxBytes: Number(process.env.HISTORY_MAX_MB ?? 0) * 1024 * 1024 ||
+    stored.historyMaxBytes ||
+    null,
+  /**
+   * Which stream recordings are made from — `sd` or `hd`.
+   *
+   * Small by default. It is a quarter of the picture and an eighth of the disk, and for the
+   * question a doorbell recording usually answers — was that the courier, did they leave it by
+   * the gate — it is enough. A household that wants to read a face turns it up.
+   */
+  historyQuality: process.env.HISTORY_QUALITY ?? stored.historyQuality ?? 'sd',
+}
+
+/** `HISTORY_ENABLED=false` should mean false, which `Boolean('false')` does not. */
+function envFlag(value) {
+  if (value === undefined) return null
+  return !/^(0|false|no|off)$/i.test(value.trim())
 }
 
 /**
@@ -254,6 +290,45 @@ async function cameraAspect() {
     log(`camera: could not read the picture shape — ${error.message}`)
   }
   return null
+}
+
+/**
+ * One still picture from the gate, as JPEG.
+ *
+ * The intercom draws this itself and hands it over in about a fifth of a second, which is the
+ * cheap way to a thumbnail: pulling one out of the video would mean decoding H.264 here, and
+ * this agent's whole approach to video is to never decode any of it.
+ */
+async function gateSnapshot() {
+  const chunks = []
+
+  await digestGet({
+    ...config,
+    path: `/cgi-bin/snapshot.cgi?channel=${config.cameraChannel}`,
+    timeoutMs: 6_000,
+    onStream: (response) =>
+      new Promise((resolve, reject) => {
+        let bytes = 0
+        response.on('data', (chunk) => {
+          bytes += chunk.length
+          // A picture this large is not a picture. Half a megabyte is already four times what
+          // this camera sends.
+          if (bytes > 2 * 1024 * 1024) {
+            response.destroy()
+            reject(new Error('the picture was larger than it should be'))
+            return
+          }
+          chunks.push(chunk)
+        })
+        response.on('end', resolve)
+        response.on('error', reject)
+      }),
+  })
+
+  const image = Buffer.concat(chunks)
+  // JPEGs start with these two bytes. Anything else is an error page.
+  if (image[0] !== 0xff || image[1] !== 0xd8) throw new Error('that was not a picture')
+  return image
 }
 
 /**
@@ -481,6 +556,9 @@ class WorkerLink {
     // speaker for them to be heard through, and what stops every other screen in the house
     // ringing — the two halves of what answering means.
     if (message.type === 'call-answered') {
+      // Written down before the hanging up, because hanging up is what ends the visit and the
+      // note belongs to the visit it happened in.
+      history.noteAnswered(message.by)
       if (callInProgress) await endCallAtGate()
       return
     }
@@ -518,9 +596,52 @@ class WorkerLink {
       return
     }
 
+    // How long to record and how much room to use. Only through the Worker, and only from the
+    // phone it says owns this house: a guest may watch the gate and open it, and neither of
+    // those quietly deletes six months of what the household remembers.
+    //
+    // A phone at home talks straight to this machine over the house network, where every key
+    // holder looks the same — so the app sends this the long way round even from the hallway,
+    // and this end simply does not offer it on the short one.
+    if (message.type === 'history-configure') {
+      if (message.role !== 'owner') {
+        log('history: refused a settings change that did not come from the owner')
+        return
+      }
+      const settings = history.configure(message.settings ?? {})
+      this.#sink.send({ type: 'history-settings', reqId: message.reqId, settings })
+      return
+    }
+
+    // Everything else the history screen asks for.
+    //
+    // The same handler as a phone on the house network uses, given a way back that stamps the
+    // Worker's question id onto whatever it answers — one socket carries every phone's
+    // questions, and the id is what tells their answers apart at the other end.
+    if (message.type?.startsWith('history-')) {
+      const sink = this.#sink
+      const reqId = message.reqId
+      await handleViewerMessage(message, {
+        send: (payload) => sink.send(reqId ? { ...payload, reqId } : payload),
+        sendBinary: (chunk) => sink.sendBinary(chunk),
+      })
+      return
+    }
+
     if (message.type !== 'open') return
 
     const startedAt = Date.now()
+    // Claimed before the relay is pressed rather than after: the intercom has reported the
+    // opening in as little as 65 milliseconds, which is sooner than the reply to this request
+    // comes back.
+    recentRemoteOpen = {
+      by: message.by ?? 'a phone',
+      at: startedAt,
+      // Which gate, so the history can show the household's own name and icon for it rather
+      // than one word for both.
+      channel: Number(message.channelId ?? 1),
+    }
+
     try {
       await openDoor(message.channelId ?? '1')
       const elapsedMs = Date.now() - startedAt
@@ -593,6 +714,9 @@ const FRAME_VIDEO = 2
 const FRAME_AUDIO = 3
 /** The only kind that travels the other way: a voice going out to the gate. */
 const FRAME_TALK = 4
+
+/** A still picture from the history: kind, timestamp, one byte of id length, the id, the JPEG. */
+const FRAME_THUMBNAIL = 5
 
 /** Long enough for a slow phone network, short enough that a stall is not a night of silence. */
 const HANDSHAKE_TIMEOUT_MS = 15_000
@@ -921,6 +1045,70 @@ function frame(kind, timestamp, payload) {
   return Buffer.concat([header, payload])
 }
 
+/**
+ * The stream that exists to be written down, separate from the one people watch.
+ *
+ * Sharing the viewers' stream was the obvious thing and the wrong one. It ties two decisions
+ * together that belong apart: a recording is watched later, on a big screen, to see a face —
+ * while a phone watching live over mobile data wants the small picture. Worse, it made the
+ * recording follow whatever the viewers did to it. Somebody tapping HD mid visit changed the
+ * picture's size halfway through the file, and the clip decoded as rubble from that point on.
+ *
+ * So this opens its own session for the length of the visit. The intercom serves both without
+ * complaint — it is rated far above the two put together — and the second one never leaves the
+ * house, so it costs nobody's data.
+ */
+class Recorder {
+  #stream = null
+
+  get recording() {
+    return this.#stream !== null
+  }
+
+  start(sink, quality) {
+    this.stop()
+
+    log(`history: recording the ${quality} stream`)
+
+    this.#stream = openStream({
+      host: config.host,
+      port: config.rtspPort,
+      path: streamPath(quality),
+      username: config.username,
+      password: config.password,
+      onConfig: ({ sps, pps }) => {
+        sink.send({
+          type: 'stream-config',
+          codec: 'h264',
+          quality,
+          sps: sps?.toString('base64') ?? '',
+          pps: pps?.toString('base64') ?? '',
+          displayAspect: 0,
+          audio: { codec: 'pcm', sampleRate: 16000, bigEndian: true },
+        })
+      },
+      onVideo: ({ data, keyframe, timestamp }) => {
+        sink.sendBinary(frame(keyframe ? FRAME_VIDEO_KEY : FRAME_VIDEO, timestamp, data))
+      },
+      onAudio: ({ data, timestamp }) => {
+        sink.sendBinary(frame(FRAME_AUDIO, timestamp, data))
+      },
+      onError: (error) => {
+        log(`history: the recording stream stopped — ${error.message}`)
+        this.#stream = null
+      },
+      onClose: () => {
+        this.#stream = null
+      },
+    })
+  }
+
+  stop() {
+    this.#stream?.close()
+    this.#stream = null
+  }
+}
+
 // ── Wiring ───────────────────────────────────────────────────────────────
 
 /**
@@ -933,16 +1121,181 @@ const talkback = new Talkback()
 audience.attach(camera)
 
 /**
+ * The house's own memory of the gate.
+ *
+ * It joins the audience when the doorbell rings, which is what opens the camera, and leaves
+ * when the visit is over. To everything else here it is simply another viewer — one that
+ * happens to write what it sees to a disk instead of a screen.
+ */
+const history = new History({
+  dir: DATA_PATH,
+  log,
+  snapshot: gateSnapshot,
+  enabled: config.historyEnabled,
+  quality: config.historyQuality,
+  recordMs: config.historySeconds ? config.historySeconds * 1000 : null,
+  maxBytes: config.historyMaxBytes,
+  onVisitEnd: () => recorder.stop(),
+  onSettings: ({ enabled, recordSeconds, maxBytes, quality }) => {
+    config.historyEnabled = enabled
+    config.historySeconds = recordSeconds
+    config.historyMaxBytes = maxBytes
+    config.historyQuality = quality
+    writeConfig({
+      historyEnabled: enabled,
+      historySeconds: recordSeconds,
+      historyMaxBytes: maxBytes,
+      historyQuality: quality,
+    })
+  },
+})
+
+/** Its own stream, for the length of a visit. See `Recorder`. */
+const recorder = new Recorder()
+
+/**
+ * The intercom's own two logs, which cover what this agent cannot see.
+ *
+ * A card held to the reader opens the gate with no phone involved and no way for us to say who
+ * it was — the intercom knows, and it is the only one who does. Its call log is read for a
+ * different reason: it reaches back years, to before this machine was plugged in.
+ */
+const records = new IntercomRecords({ config, log })
+
+/** Playbacks in progress, so a viewer that leaves stops the clip it asked for. */
+const playing = new Map()
+
+/**
+ * The last gate command this agent carried out, waiting for the intercom to report it.
+ *
+ * The intercom's event says a gate opened, never who opened it, and the relay we press looks
+ * exactly like a card held to the reader. Three seconds is far longer than the gap measured
+ * between pressing and being told about it — around 70 milliseconds — and far shorter than the
+ * time between two people arriving.
+ */
+const REMOTE_OPEN_WINDOW_MS = 3_000
+let recentRemoteOpen = null
+
+function stopPlayback(viewer) {
+  const cancel = playing.get(viewer)
+  if (!cancel) return
+  playing.delete(viewer)
+  cancel()
+}
+
+/**
  * What a viewer is allowed to ask for, from either direction.
  *
  * Deliberately the same short list on both: a phone on the house network is closer to the
  * gate but is not more trusted than one on the far side of the world, and this is the only
  * place that decides what a viewer can do at all.
  */
-async function handleViewerMessage(message) {
+async function handleViewerMessage(message, viewer = null) {
   switch (message.type) {
     case 'stream-quality':
       camera.setQuality(message.quality)
+      return
+
+    // What happened at this gate, newest first. The pictures are not in it — a list of fifty
+    // visits carrying fifty photographs is two megabytes for a screen showing six of them, so
+    // each is asked for separately as it comes into view.
+    // A page of what happened, newest first.
+    //
+    // `before` is the oldest moment already on the phone's screen, so asking again with it is
+    // how the next page is had — an offset would slide under a doorbell that rang while
+    // somebody was scrolling, and show them a row twice or not at all.
+    case 'history-list': {
+      if (!viewer) return
+
+      const limit = Math.min(Math.max(Number(message.limit) || 30, 1), 200)
+      const before = Number(message.before) || null
+      const kind = message.kind === 'ring' || message.kind === 'gate' ? message.kind : null
+
+      // Merged whole and then cut, rather than paged from each source: the two lists are one
+      // story told from two sides, and a page taken from either alone would be missing the
+      // other's rows in the middle of it.
+      const all = merge(history.list({ limit: 500 }), records.entries())
+      const page = all
+        .filter((entry) => (kind ? entry.kind === kind : true))
+        .filter((entry) => (before ? entry.at < before : true))
+        .slice(0, limit)
+
+      viewer.send({
+        type: 'history',
+        entries: page,
+        // Said plainly rather than left to be guessed from a short page: a page can be short
+        // because the list ended, or because a filter thinned it out.
+        more: page.length === limit,
+      })
+      return
+    }
+
+    // The picture belonging to one visit. The id travels inside the payload rather than in a
+    // message before it, so two of these crossing on the wire cannot be mixed up.
+    case 'history-thumb': {
+      if (!viewer) return
+      const path = history.thumbPath(String(message.id ?? ''))
+      if (!path) {
+        // Only worth saying when somebody is waiting for a reply. A phone on the house network
+        // is asking as the row scrolls into view and can simply show nothing.
+        if (message.inline) viewer.send({ type: 'history-thumb', id: message.id, jpeg: null })
+        return
+      }
+
+      const id = Buffer.from(String(message.id), 'utf8')
+      const image = readFileSync(path)
+
+      // Through the Worker there is no way to hand back a lump of bytes on its own — the
+      // question came in as a message and the answer goes back as one. Fifty kilobytes as text
+      // is sixty-seven, which is a fair price for not building a second channel.
+      if (message.inline) {
+        viewer.send({ type: 'history-thumb', id: message.id, jpeg: image.toString('base64') })
+        return
+      }
+
+      const header = Buffer.alloc(6)
+      header[0] = FRAME_THUMBNAIL
+      header.writeUInt32BE(0, 1)
+      header.writeUInt8(Math.min(255, id.length), 5)
+      viewer.sendBinary(Buffer.concat([header, id, image]))
+      return
+    }
+
+    // A piece of a recording, as text, for the phone that is not on this network.
+    case 'history-clip': {
+      if (!viewer) return
+      const slice = history.read(message.id, message.offset, message.length)
+      if (!slice) {
+        viewer.send({ type: 'history-clip', id: message.id, error: 'no recording' })
+        return
+      }
+
+      viewer.send({
+        type: 'history-clip',
+        id: message.id,
+        offset: slice.offset,
+        size: slice.size,
+        codec: slice.codec,
+        bytes: slice.bytes.toString('base64'),
+      })
+      return
+    }
+
+    case 'history-play': {
+      if (!viewer) return
+      stopPlayback(viewer)
+      playing.set(viewer, history.play(String(message.id ?? ''), viewer))
+      return
+    }
+
+    case 'history-stop':
+      if (viewer) stopPlayback(viewer)
+      return
+
+    // Readable by anyone who can watch the camera; changed only through the Worker, which is
+    // the only place that knows an owner from a guest. See `WorkerLink.#handle`.
+    case 'history-settings':
+      viewer?.send({ type: 'history-settings', settings: history.settings() })
       return
     case 'talk-start':
       await talkback.start()
@@ -963,6 +1316,15 @@ async function handleViewerMessage(message) {
     case 'test-ring':
       if (!link) return
       log('test: reporting a doorbell press that did not happen')
+
+      // Recorded like any other visit, so a rehearsal exercises the camera, the disk and the
+      // limits rather than only the notification. It is marked as what it was — the code is
+      // kept with the visit — so nobody reading the history later mistakes it for a caller.
+      {
+        const visit = history.beginVisit({ code: 'AjarTestRing' })
+        if (visit.clip) recorder.start(history.sink, history.quality)
+      }
+
       link.send({ type: 'ring', deviceId: config.deviceId, code: 'AjarTestRing' })
       return
 
@@ -1321,12 +1683,23 @@ async function main() {
         key: config.localKey,
         serial: config.deviceId,
         onViewer: (sink) => audience.add(sink),
-        onGone: (sink) => audience.remove(sink),
-        onMessage: (message) => void handleViewerMessage(message),
+        onGone: (sink) => {
+          stopPlayback(sink)
+          audience.remove(sink)
+        },
+        onMessage: (message, viewer) => void handleViewerMessage(message, viewer),
         onPair: () => link.requestPairingCode(),
         log,
       })
   localServer?.start()
+
+  // Not in `--watch`, which exists to print event codes on somebody else's intercom and has no
+  // business writing recordings to their disk.
+  if (!watchOnly) await history.ready()
+
+  // Read once at startup so the first phone to open the history sees the card openings too,
+  // rather than an empty half of the list that fills in a moment later.
+  if (!watchOnly) void records.refresh()
 
   // Only useful to a phone that has not paired yet, which is the one case where nothing else
   // can tell it where to look.
@@ -1370,6 +1743,34 @@ async function main() {
 
         if (kind === 'ring') callInProgress = true
         if (kind === 'cancelled' || kind === 'gate_opened') callInProgress = false
+
+        // Whether anybody is watching or not, and whether anybody answers or not, a visit is
+        // worth keeping. Joining the audience is what opens the camera — the same single
+        // stream a phone would be given, not a second one — and the recording carries on
+        // through being answered, because who came and what was said is the part worth having.
+        if (kind === 'ring' && !duplicateRing) {
+          const visit = history.beginVisit({ code: event.code })
+          if (visit.clip) recorder.start(history.sink, history.quality)
+        }
+
+        // The gate opening is not the end of a visit: the intercom's own call goes on until it
+        // is cancelled, and so does the recording. It is the cancel that closes both.
+        //
+        // The intercom reports that a gate opened without saying who opened it — the same
+        // event for a card held to the reader and for this agent pressing the relay a
+        // millisecond earlier. So the two are told apart here: a command we just carried out
+        // claims the event, and anything else was somebody at the gate itself.
+        if (kind === 'gate_opened') {
+          const ours = recentRemoteOpen && Date.now() - recentRemoteOpen.at < REMOTE_OPEN_WINDOW_MS
+          history.noteGateOpened(
+            ours
+              ? { by: recentRemoteOpen.by, method: 'app', door: recentRemoteOpen.channel }
+              : { by: null, method: 'card' }
+          )
+          recentRemoteOpen = null
+        }
+
+        if (kind === 'cancelled') history.endVisit('the call ended')
 
         if (!kind || !link || duplicateRing) return
         link.send({ type: kind, deviceId: config.deviceId, code: event.code })
