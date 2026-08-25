@@ -20,9 +20,19 @@ Whatever route you take below, these two decide whether it works at all:
 | Setting | Value | Why |
 |---|---|---|
 | Network mode | **Host** | The agent finds your intercom by shouting on the local network, and serves your phone on it. From behind a container's own address it can do neither. |
-| Volume | a folder → `/config` | Where the intercom's password and the agent's identity are kept. Without it, every update asks for the password again and your phone has to pair again. |
+| Volume | a folder → `/config` | Where the intercom's password, the agent's identity, and the recordings are kept. Without it, every update asks for the password again, your phone has to pair again, and the history is thrown away with the old container. |
 
 If the container starts and says it found no intercom, it is the network mode. Every time.
+
+**Name the volume, or give it a folder.** Leaving it out does not fail loudly: Docker invents a
+volume nobody named, the agent works, and then the usual update — remove the container, run it
+again — starts a fresh one and abandons the old, along with however many gigabytes of doorbell
+video it held. The agent says so in its log at startup if this is how it was started.
+
+Recordings live beside the settings, in `/config/history`. A NAS is the best of the machines
+this runs on for that: it is the one with room. The app decides how much of it to use — from
+half a gigabyte to five, in *Settings → Recordings* — and the agent will not go past a tenth of
+whatever was free when it started, nor write at all with under a gigabyte left on the disk.
 
 ---
 

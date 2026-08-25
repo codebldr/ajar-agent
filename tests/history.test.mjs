@@ -5,7 +5,7 @@
 // recording is a feature; a history that quietly fills somebody's disk is a fault, and the line
 // between them is the sweep.
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, describe, test } from 'node:test'
@@ -99,6 +99,43 @@ describe('the history', () => {
     await pause(200)
 
     assert.equal(played.length, 10, 'ten frames in, ten frames out')
+  })
+
+  test('keeps the gate working when it cannot write anywhere', async () => {
+    // What a NAS looks like when the folder mounted at /config belongs to root and the
+    // container runs as somebody else — and what Home Assistant looks like when a share was
+    // never mapped. Before, this came out of startup as "the agent stopped": a house with no
+    // doorbell because it could not keep a video.
+    const parent = scratch()
+    const dir = join(parent, 'history')
+    mkdirSync(dir)
+    chmodSync(dir, 0o500)
+
+    const said = []
+    const history = await new History({ dir, log: (line) => said.push(line) }).ready()
+
+    assert.ok(said.some((line) => line.includes('cannot write')), 'it says so, once')
+    assert.equal(history.settings().writable, false)
+    assert.equal(history.settings().enabled, false, 'and does not pretend to be recording')
+
+    // The doorbell path still runs, and nothing thrown by it reaches the agent.
+    const visit = history.beginVisit({ code: 'Invite' })
+    assert.equal(visit.clip, null)
+    history.noteAnswered('a phone')
+    history.endVisit('done')
+
+    // Coming home, which is the other way in. It used to build an entry and try to write it —
+    // so a house with an unwritable folder complained once per gate opening, for ever.
+    said.length = 0
+    history.noteGateOpened({ by: 'a phone', method: 'app' })
+    assert.deepEqual(said, [], 'and says nothing more after the one line at startup')
+    assert.deepEqual(history.list(), [])
+
+    // A switch that cannot do anything does not move.
+    history.configure({ enabled: true })
+    assert.equal(history.settings().enabled, false)
+
+    chmodSync(dir, 0o700)
   })
 
   test('remembers who answered and who opened the gate', async () => {

@@ -21,8 +21,14 @@ host_network: true
 
 # Its configuration — including the intercom's password — belongs in the add-on's own storage,
 # not in the image and not in Home Assistant's configuration file.
+#
+# Recordings go somewhere else on purpose. The add-on's config folder is swept into every Home
+# Assistant backup, so keeping video there would make each backup carry the household's whole
+# history and grow month after month. `/media` is the place Home Assistant keeps large files,
+# is a separate tick in the backup dialog, and can play what is in it from its own interface.
 map:
   - addon_config:rw
+  - media:rw
 
 startup: services
 boot: auto

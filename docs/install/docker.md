@@ -35,8 +35,11 @@ Neither flag is decoration:
 
 - **`--network host`** — the agent finds the intercom by broadcasting on the local network and
   serves your phone on it. From behind a container's own address it can do neither.
-- **`-v ajar-config:/config`** — the intercom's password and the agent's identity. Without it,
-  every update asks for the password again and every phone has to pair again.
+- **`-v ajar-config:/config`** — the intercom's password, the agent's identity, and the
+  recordings of every visit. Without it, every update asks for the password again, every phone
+  has to pair again, and the history goes with the old container: Docker makes a volume nobody
+  named, and removing the container leaves it behind. Name it, as above, or point it at a folder
+  of your own — `-v /srv/ajar:/config`. The agent says so in its log if it was started without.
 
 Single quotes around the password, or a `$` in it disappears before Docker sees it.
 
@@ -99,6 +102,7 @@ All optional except the password.
 | `CAMERA_CHANNEL` | `1`. A second gate is `2`. |
 | `RTSP_PORT` | `554`. |
 | `AJAR_CONFIG` | Where settings are kept. Already `/config/agent.json` in the image. |
+| `AJAR_DATA` | Where recordings are kept. Beside the settings unless told otherwise — set it to put video on a different disk than the configuration. |
 
 `docker run --rm ajar-agent --help` lists the rest.
 

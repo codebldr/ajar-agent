@@ -90,6 +90,22 @@ Leave *Start on boot* and *Watchdog* on, which is what makes it survive a power 
   they live in the add-on's own storage, not in the image. If it does not show, three dots in
   the store → *Check for updates*.
 
+## Where the recordings go
+
+In **`/media/ajar`**, not in the add-on's own folder — deliberately.
+
+Every visit keeps a picture and a short video, which over a year is a few gigabytes. The add-on's
+configuration folder is swept into every Home Assistant backup, so keeping video there would make
+each backup carry the whole history and grow month after month. `/media` is where Home Assistant
+expects files of this size, is its own tick in the backup dialog, and can be browsed and played
+from Home Assistant's own **Media** panel.
+
+How much of it to use is set from the Ajar app — *Settings → Recordings* — along with how long a
+visit is recorded for and whether to record at all. Whatever is chosen there, the agent will not
+take more than a tenth of the space that was free when it started, and stops recording entirely
+with under a gigabyte left. On a Home Assistant box with a small card that matters more than the
+history does.
+
 ## Why it wants the host network
 
 The add-on runs with `host_network: true`, and it will not work without it. The agent finds the

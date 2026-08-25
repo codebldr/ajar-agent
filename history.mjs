@@ -106,6 +106,8 @@ export class History {
   #onSettings = null
   #onVisitEnd = null
   #sink = null
+  /** False when the folder could not be created. Nothing is written, and nothing throws. */
+  #writable = true
 
   /**
    * @param dir       where clips and the index live
@@ -152,9 +154,36 @@ export class History {
    * they were never going to read.
    */
   async ready() {
-    for (const path of [this.#dir, join(this.#dir, CLIP_DIR), join(this.#dir, THUMB_DIR)]) {
-      mkdirSync(path, { recursive: true })
+    // A history that cannot be written is a disappointment; a doorbell that does not ring is a
+    // fault. So this never stops the agent.
+    //
+    // The folder is somebody else's on every installation but the Pi: a bind mount on a NAS
+    // owned by root while the container runs as nobody, a Home Assistant share that was never
+    // mapped. Those are permission errors at startup, and before this they came out of
+    // `main()` as "the agent stopped" — a house with no gate because it could not keep a video.
+    try {
+      for (const path of [this.#dir, join(this.#dir, CLIP_DIR), join(this.#dir, THUMB_DIR)]) {
+        mkdirSync(path, { recursive: true })
+      }
+
+      // Making the folders is not the same as being allowed to write in them, and the second
+      // is the one that matters. A folder left behind by an earlier run — or one somebody
+      // created by hand — makes `mkdir` succeed on a filesystem that then refuses every write,
+      // which showed up as a line of complaint per frame and a switch claiming to record.
+      const probe = join(this.#dir, '.writable')
+      writeFileSync(probe, '')
+      rmSync(probe, { force: true })
+    } catch (error) {
+      this.#enabled = false
+      this.#writable = false
+      this.#log(
+        `history: cannot write to ${this.#dir} — ${error.message}.` +
+          ' The gate works; visits are not being kept.'
+      )
+      return this
     }
+
+    this.#warnIfInsideTheContainer()
 
     const free = await this.#freeBytes()
     if (this.#askedForBytes) {
@@ -190,6 +219,8 @@ export class History {
   settings() {
     return {
       enabled: this.#enabled,
+      /** False when the folder could not be created — the app says so rather than a switch lying. */
+      writable: this.#writable,
       quality: this.#quality,
       recordSeconds: Math.round(this.#recordMs / 1000),
       maxBytes: Math.round(this.#maxBytes),
@@ -211,7 +242,9 @@ export class History {
    * space allowance takes effect at once — that is usually why somebody lowers it.
    */
   configure({ enabled, recordSeconds, maxBytes, quality } = {}) {
-    if (typeof enabled === 'boolean') this.#enabled = enabled
+    // Turning recording on when there is nowhere to put it would be a switch that moves and
+    // changes nothing.
+    if (typeof enabled === 'boolean') this.#enabled = enabled && this.#writable
     if (quality === 'sd' || quality === 'hd') this.#quality = quality
     if (Number.isFinite(recordSeconds)) {
       this.#recordMs = clamp(Math.round(recordSeconds * 1000), RECORD_MS_RANGE)
@@ -253,6 +286,10 @@ export class History {
    * on the visits where the video never starts.
    */
   beginVisit({ at = Date.now(), code = null } = {}) {
+    // Nowhere to write. The doorbell still rings, the camera still works; there is simply no
+    // record of it, which is what the log said at startup.
+    if (!this.#writable) return { id: '', at, kind: 'ring', code, clip: null }
+
     this.#closeVisit('superseded')
 
     const id = `${at}-${randomBytes(3).toString('hex')}`
@@ -282,6 +319,10 @@ export class History {
    * what coming home looks like.
    */
   noteGateOpened({ by = null, method = 'remote', name = null, door = null } = {}) {
+    // Nowhere to write. Said once at startup; not once per gate opening for the life of the
+    // house, which is what happened while only `beginVisit` knew to stay quiet.
+    if (!this.#writable) return null
+
     if (this.#visit) {
       this.#visit.openedBy = by ?? name ?? 'a phone'
       this.#visit.openedAt = Date.now()
@@ -680,6 +721,49 @@ export class History {
   }
 
   // ── Keeping it small ───────────────────────────────────────────────────
+
+  /**
+   * Says so when recordings are somewhere that will not survive.
+   *
+   * Two ways to lose them in a container, and neither announces itself. Writing into the
+   * container's own filesystem is the obvious one. The other is quieter and likelier: Docker
+   * makes an anonymous volume when nobody says where `/config` should live, and the update
+   * instructions in every guide — remove the container, run it again — leave that volume
+   * orphaned and start a fresh one. The history is not deleted so much as abandoned, along
+   * with however many gigabytes it had grown to.
+   *
+   * A named volume or a folder from the host both read as a path somebody chose. An anonymous
+   * one is sixty-four hex characters, which is what this looks for.
+   */
+  #warnIfInsideTheContainer() {
+    if (!existsSync('/.dockerenv') && !existsSync('/run/.containerenv')) return
+
+    const advice = ' Give it a folder that outlives the container — see the installation guide.'
+
+    try {
+      if (statSync(this.#dir).dev === statSync('/').dev) {
+        this.#log(`history: ${this.#dir} is inside the container.${advice}`)
+        return
+      }
+    } catch {
+      return
+    }
+
+    try {
+      const mounts = readFileSync('/proc/self/mountinfo', 'utf8').split('\n')
+      const anonymous = mounts.some((line) => {
+        const [source, target] = [line.split(' ')[3], line.split(' ')[4]]
+        if (!target || !this.#dir.startsWith(target)) return false
+        return /\/volumes\/[0-9a-f]{64}\/_data$/.test(source ?? '')
+      })
+
+      if (anonymous) {
+        this.#log(`history: ${this.#dir} is on a volume Docker named itself.${advice}`)
+      }
+    } catch {
+      // No mountinfo, or an unreadable one. The check is a courtesy, not a requirement.
+    }
+  }
 
   async #freeBytes() {
     try {
