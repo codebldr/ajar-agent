@@ -23,13 +23,13 @@ describe('merging our history with the intercom’s', () => {
 
   test('keeps a card opening, which only the intercom saw', () => {
     const theirs = [
-      { id: 'vto-open-2', at: at(20), kind: 'gate', method: 'card', openedBy: 'chivuta2' },
+      { id: 'vto-open-2', at: at(20), kind: 'gate', method: 'card', openedBy: 'Blue fob' },
     ]
 
     const merged = merge([], theirs)
     assert.equal(merged.length, 1)
     assert.equal(merged[0].method, 'card')
-    assert.equal(merged[0].openedBy, 'chivuta2')
+    assert.equal(merged[0].openedBy, 'Blue fob')
   })
 
   test('does not swallow an opening that happened later', () => {

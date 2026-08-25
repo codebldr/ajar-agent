@@ -152,10 +152,10 @@ describe('the history', () => {
     assert.equal(entry.openedBy, 'Pixel 7')
 
     // Coming home is not a visit: nobody rang, so it stands on its own line.
-    history.noteGateOpened({ name: 'chivuta2', method: 'card' })
+    history.noteGateOpened({ name: 'Blue fob', method: 'card' })
     const [latest] = history.list()
     assert.equal(latest.kind, 'gate')
-    assert.equal(latest.openedBy, 'chivuta2')
+    assert.equal(latest.openedBy, 'Blue fob')
   })
 
   test('survives being restarted, and collapses its corrections', async () => {

@@ -38,7 +38,7 @@ starts with the Mac.
 ```
 Looking for intercoms on this network…
 
-  1. DHI-VTO2211G-WP  192.168.100.2  7B00D79PAJ0702C
+  1. DHI-VTO2211G-WP  192.168.100.2  7A00ABCDEFG1234
 
 Intercom username [admin]: 
 Intercom password: 

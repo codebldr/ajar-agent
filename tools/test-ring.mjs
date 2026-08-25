@@ -1,7 +1,7 @@
 // Rings the doorbell without anybody walking to the gate.
 //
 //   node tools/test-ring.mjs            on the machine the agent runs on
-//   node tools/test-ring.mjs 192.168.0.111 <house-key>    from anywhere on the house network
+//   node tools/test-ring.mjs 192.168.1.50 <house-key>    from anywhere on the house network
 //
 // It asks the agent to report a doorbell press upward. Everything past this machine is then the
 // real thing — the Worker, the push, the notification, the sound, the screen — which is the
