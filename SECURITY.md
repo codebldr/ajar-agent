@@ -5,9 +5,14 @@ careful with it.
 
 ## Reporting something
 
-Email **5269394+romeoonisim@users.noreply.github.com** with what you found and how to reproduce it. Please do not open
-a public issue for anything that would let somebody open a gate they do not own — a house is on
-the other end of it.
+Use GitHub's private reporting: **[Report a vulnerability][report]**, on this repository's
+Security tab. It opens a conversation only you and the maintainer can see, and it stays that way
+until there is a fix to announce.
+
+Please do not open a public issue for anything that would let somebody open a gate they do not
+own — a house is on the other end of it.
+
+[report]: https://github.com/romeoonisim/ajar-agent/security/advisories/new
 
 You will get an answer within a week. If what you found is real, you will be told when it is
 fixed and credited in the release unless you would rather not be.

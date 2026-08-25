@@ -9,4 +9,7 @@
 # less than asking somebody to copy a folder over SSH.
 name: Ajar
 url: https://github.com/romeoonisim/ajar-agent
-maintainer: Romeo Onisim <5269394+romeoonisim@users.noreply.github.com>
+# An address rather than a mailbox: this file is public, and a mailbox in a public file is a
+# mailbox in every scraper's list. Security reports go through GitHub's private reporting —
+# see SECURITY.md.
+maintainer: Romeo Onisim <https://github.com/romeoonisim>
