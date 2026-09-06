@@ -256,7 +256,7 @@ VTO_HOST, VTO_PORT, VTO_USERNAME, VTO_PASSWORD, DEVICE_ID, WORKER_URL, AGENT_SEC
 RTSP_PORT, CAMERA_CHANNEL, AJAR_CONFIG.
 
 The six-digit pairing code is printed when the agent connects. It lasts ten minutes; restart
-the agent for another. Installing: https://github.com/romeoonisim/ajar-agent`)
+the agent for another. Installing: https://github.com/codebldr/ajar-agent`)
   process.exit(0)
 }
 

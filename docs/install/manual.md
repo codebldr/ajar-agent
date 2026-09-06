@@ -5,7 +5,7 @@ whose init system is its own business, or for reading what it does before lettin
 gate.
 
 ```sh
-git clone https://github.com/romeoonisim/ajar-agent.git
+git clone https://github.com/codebldr/ajar-agent.git
 cd ajar-agent
 node agent.mjs --setup     # once, to answer the questions
 node agent.mjs             # to run it

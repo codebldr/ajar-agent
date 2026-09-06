@@ -15,7 +15,7 @@ with a network of its own, so `--network host` gets you the VM's network rather 
 There is no published image yet, so build from source:
 
 ```sh
-git clone https://github.com/romeoonisim/ajar-agent.git
+git clone https://github.com/codebldr/ajar-agent.git
 cd ajar-agent
 docker build -t ajar-agent .
 ```
@@ -168,4 +168,4 @@ change.
 **Already running the agent elsewhere?** Stop that one first — see [moving it](moving.md). Two
 agents on one intercom knock each other off in a loop.
 
-[issues]: https://github.com/romeoonisim/ajar-agent/issues
+[issues]: https://github.com/codebldr/ajar-agent/issues

@@ -72,5 +72,5 @@ intercom itself.
   measured against real hardware rather than taken from a manual.
 - `node agent.mjs --help` — every flag and every environment variable.
 - A model whose doorbell does not come through: run the agent with `--watch`, press the button,
-  and [open an issue](https://github.com/romeoonisim/ajar-agent/issues) with what it printed.
+  and [open an issue](https://github.com/codebldr/ajar-agent/issues) with what it printed.
   The event codes are settings rather than code, so it is a small change.

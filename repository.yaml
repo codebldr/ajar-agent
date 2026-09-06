@@ -8,7 +8,7 @@
 # button, and updates when the `version` in ha-addon/config.yaml goes up. That is a great deal
 # less than asking somebody to copy a folder over SSH.
 name: Ajar
-url: https://github.com/romeoonisim/ajar-agent
+url: https://github.com/codebldr/ajar-agent
 # An address rather than a mailbox: this file is public, and a mailbox in a public file is a
 # mailbox in every scraper's list. Security reports go through GitHub's private reporting —
 # see SECURITY.md.

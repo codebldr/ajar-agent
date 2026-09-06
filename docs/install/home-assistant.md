@@ -26,7 +26,7 @@ the Ajar app, not to Home Assistant.
 3. Paste this and **Add**:
 
    ```
-   https://github.com/romeoonisim/ajar-agent
+   https://github.com/codebldr/ajar-agent
    ```
 
 4. **Close**
@@ -119,7 +119,7 @@ If you would rather Home Assistant did not follow a repository of ours, install 
 add-on instead. With the **Advanced SSH & Web Terminal** add-on:
 
 ```sh
-git clone https://github.com/romeoonisim/ajar-agent.git /tmp/ajar-agent
+git clone https://github.com/codebldr/ajar-agent.git /tmp/ajar-agent
 cp -r /tmp/ajar-agent/ha-addon /addons/ajar
 rm -rf /tmp/ajar-agent
 ```
@@ -141,7 +141,7 @@ and press **Rebuild**.
 heading, below every official one.
 
 **"Invalid repository" when adding it.** The address is the repository itself,
-`https://github.com/romeoonisim/ajar-agent` — not a link to a file inside it, and no `.git` on
+`https://github.com/codebldr/ajar-agent` — not a link to a file inside it, and no `.git` on
 the end.
 
 **The build fails.** It downloads the agent from GitHub while building, so the Home Assistant
@@ -167,4 +167,4 @@ is a small change.
 **Already running the agent on another machine?** Stop that one first — see
 [moving it](moving.md). Two agents on one intercom knock each other off in a loop.
 
-[issues]: https://github.com/romeoonisim/ajar-agent/issues
+[issues]: https://github.com/codebldr/ajar-agent/issues

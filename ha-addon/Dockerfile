@@ -5,7 +5,7 @@ FROM $BUILD_FROM
 # source to drift out of step with the first. Pinned to a tag: an add-on that quietly rebuilds
 # itself into a different version is not something to leave in somebody's house.
 ARG AGENT_REF=main
-ARG AGENT_REPO=https://github.com/romeoonisim/ajar-agent
+ARG AGENT_REPO=https://github.com/codebldr/ajar-agent
 
 # No dependencies beyond Node itself — the agent has none, which is most of why it is safe to
 # hand to a stranger who is about to point it at their front gate.

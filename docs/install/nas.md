@@ -42,7 +42,7 @@ Turn on SSH in the NAS's settings — Synology: *Control Panel → Terminal & SN
 *Control Panel → Telnet/SSH* — then log in and run:
 
 ```sh
-git clone https://github.com/romeoonisim/ajar-agent.git
+git clone https://github.com/codebldr/ajar-agent.git
 cd ajar-agent
 docker build -t ajar-agent .
 ```
@@ -78,7 +78,7 @@ prints a new one.
 If Docker on your NAS refuses `git`, download the source instead:
 
 ```sh
-curl -fsSL https://github.com/romeoonisim/ajar-agent/archive/refs/heads/main.tar.gz | tar -xz
+curl -fsSL https://github.com/codebldr/ajar-agent/archive/refs/heads/main.tar.gz | tar -xz
 cd ajar-agent-main
 ```
 
@@ -179,4 +179,4 @@ Press the doorbell. [Open an issue][issues] with what it printed and it will be 
 **Already running the agent elsewhere?** Stop that one first — see [moving it](moving.md). Two
 agents on one intercom knock each other off in a loop.
 
-[issues]: https://github.com/romeoonisim/ajar-agent/issues
+[issues]: https://github.com/codebldr/ajar-agent/issues

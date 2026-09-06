@@ -7,7 +7,7 @@ name: Ajar
 version: "0.1.0"
 slug: ajar
 description: Your intercom on your phone, from anywhere, without the manufacturer's cloud
-url: https://github.com/romeoonisim/ajar-agent
+url: https://github.com/codebldr/ajar-agent
 arch:
   - aarch64
   - amd64
