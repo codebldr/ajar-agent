@@ -32,7 +32,7 @@ first — two agents on the same intercom knock each other off in a loop.
 ### The short version, on a Pi
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/romeoonisim/ajar-agent/main/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/codebldr/ajar-agent/main/install.sh | sudo sh
 ```
 
 It asks for the intercom's password, then prints a **six-digit pairing code**. Type that into the
@@ -48,7 +48,7 @@ Both flags matter: without them the agent cannot find your intercom, and it forg
 on every update.
 
 ```sh
-git clone https://github.com/romeoonisim/ajar-agent.git
+git clone https://github.com/codebldr/ajar-agent.git
 cd ajar-agent
 docker build -t ajar-agent .
 docker run -d --name ajar --network host --restart unless-stopped \

@@ -27,7 +27,7 @@ No Homebrew? The installer at [nodejs.org](https://nodejs.org) does the same job
 ## 2. Install the agent
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/romeoonisim/ajar-agent/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/codebldr/ajar-agent/main/install.sh | sh
 ```
 
 No `sudo`. It installs into `~/.local/share/ajar` and registers a login item, so the agent
@@ -117,4 +117,4 @@ of their own, so the agent cannot see the intercom and your phone cannot see the
 **Already running the agent on another machine?** Stop that one first — see
 [moving it](moving.md). Two agents on one intercom knock each other off in a loop.
 
-[issues]: https://github.com/romeoonisim/ajar-agent/issues
+[issues]: https://github.com/codebldr/ajar-agent/issues

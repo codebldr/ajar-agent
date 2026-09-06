@@ -52,7 +52,7 @@ copies of Node and no idea which one is running your gate.
 ## 2. Install the agent
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/romeoonisim/ajar-agent/main/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/codebldr/ajar-agent/main/install.sh | sudo sh
 ```
 
 It puts the agent in `/opt/ajar`, asks its questions, and installs a service called
@@ -205,4 +205,4 @@ back, that is the answer. A cable to the Pi ends it permanently.
 **Already running the agent on another machine?** Stop that one first — see
 [moving it](moving.md). Two agents on one intercom knock each other off in a loop.
 
-[issues]: https://github.com/romeoonisim/ajar-agent/issues
+[issues]: https://github.com/codebldr/ajar-agent/issues

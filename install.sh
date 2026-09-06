@@ -11,7 +11,7 @@
 # Either of these works:
 #
 #   sh install.sh            from a copy of this directory
-#   curl -fsSL https://raw.githubusercontent.com/romeoonisim/ajar-agent/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/codebldr/ajar-agent/main/install.sh | sh
 #                            from nothing at all
 #
 # It touches nothing outside the install directory, the configuration directory, and one
@@ -38,7 +38,7 @@ else
   RUN_AS=$(id -un)
 fi
 
-SOURCE_URL=${AJAR_SOURCE_URL:-https://github.com/romeoonisim/ajar-agent/archive/refs/heads/main.tar.gz}
+SOURCE_URL=${AJAR_SOURCE_URL:-https://github.com/codebldr/ajar-agent/archive/refs/heads/main.tar.gz}
 SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd) || SOURCE_DIR=
 
 # Piped through sh there is no directory to have been run from, so the agent is fetched. Run
@@ -131,7 +131,7 @@ install_systemd() {
   cat > "$unit" <<UNIT
 [Unit]
 Description=Ajar intercom agent
-Documentation=https://github.com/romeoonisim/ajar
+Documentation=https://github.com/codebldr/ajar
 # The agent's first act is to dial out, so it wants a network that is actually up rather than
 # merely configured.
 After=network-online.target
