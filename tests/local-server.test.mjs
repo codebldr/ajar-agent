@@ -11,9 +11,12 @@ import assert from 'node:assert/strict'
 import { LOCAL_PORT, LocalServer } from '../local.mjs'
 
 const KEY = 'the-house-key'
+const INTERCOM_PASSWORD = 'what-is-typed-into-the-intercom'
 
 let server
 let messages = []
+/** How each pairing code was asked for, which is what decides admin or waiting room. */
+let vias = []
 
 const said = (fragment) => messages.some((line) => line.includes(fragment))
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -54,7 +57,11 @@ describe('the house network server', () => {
       onViewer: () => {},
       onGone: () => {},
       onMessage: () => {},
-      onPair: async () => '123456',
+      onPair: async (via) => {
+        vias.push(via)
+        return '123456'
+      },
+      onReclaim: async (password) => password === INTERCOM_PASSWORD,
       log: (line) => messages.push(line),
     })
     server.start()
@@ -94,12 +101,45 @@ describe('the house network server', () => {
   })
 
   test('hands out a pairing code, then asks the next one to wait', async () => {
+    vias = []
     const first = await talk(jsonFrame({ pair: true }))
     const second = await talk(jsonFrame({ pair: true }))
 
     assert.equal(first.answer.type, 'pair')
     assert.equal(first.answer.code, '123456')
     assert.equal(second.answer.type, 'pair-error')
+    assert.deepEqual(vias, ['local'], 'reaching the wifi is a local claim, and only that')
+  })
+
+  // Gate 2. Being on the house wifi is what everybody in the building can do; knowing what is
+  // typed into the intercom's own web page is what a household can do. Only the second one may
+  // turn into a code that makes somebody an admin.
+  test('refuses to claim the household on a wrong intercom password', async () => {
+    vias = []
+    const refused = await talk(jsonFrame({ reclaim: true, password: 'guessing' }))
+
+    assert.equal(refused.answer.type, 'reclaim-error')
+    assert.equal(refused.answer.error, 'wrong password')
+    assert.deepEqual(vias, [], 'a wrong password must not reach the server at all')
+  })
+
+  test('claims the household on the right one, as a claim wifi cannot make', async () => {
+    vias = []
+    // The cooldown between attempts is the brake in front of the only guessable wall here.
+    await pause(2_100)
+    const claimed = await talk(jsonFrame({ reclaim: true, password: INTERCOM_PASSWORD }))
+
+    assert.equal(claimed.answer.type, 'pair')
+    assert.equal(claimed.answer.code, '123456')
+    assert.deepEqual(vias, ['console'], 'the code must not be minted as a mere wifi claim')
+  })
+
+  test('makes guessing slow', async () => {
+    const first = await talk(jsonFrame({ reclaim: true, password: 'one' }))
+    const second = await talk(jsonFrame({ reclaim: true, password: 'two' }))
+
+    assert.equal(first.answer.type, 'reclaim-error')
+    assert.equal(second.answer.error, 'too soon')
   })
 
   test('caps how many strangers may be here at once', async () => {

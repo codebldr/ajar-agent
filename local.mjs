@@ -49,6 +49,21 @@ const MAX_PENDING = 32
 const PAIR_COOLDOWN_MS = 3_000
 
 /**
+ * How hard somebody may try the intercom's admin password from the house wifi.
+ *
+ * This is the wall between "on the wifi" and "runs the house", so it is the one thing here worth
+ * guessing at, and the only brake in front of it is this. Two seconds apart, and five wrong
+ * answers buys a quarter of an hour of nothing — which also keeps the intercom out of its own
+ * lockout, since every attempt that is not obviously wrong is put to the device itself.
+ */
+const RECLAIM_COOLDOWN_MS = 2_000
+const RECLAIM_MAX_FAILURES = 5
+const RECLAIM_LOCKOUT_MS = 15 * 60_000
+
+/** A password, not a payload. Anything longer is somebody probing. */
+const MAX_PASSWORD_LENGTH = 128
+
+/**
  * Serves whoever is on the house network and can prove they are allowed.
  *
  * The proof is a key the agent generates and reports upward; the Worker hands it only to
@@ -62,20 +77,25 @@ export class LocalServer {
   #onGone
   #onMessage
   #onPair
+  #onReclaim
   #serial
   #server = null
   #sessions = new Set()
   /** Connected, but not yet anybody: no key offered, nothing earned. */
   #pending = new Set()
   #lastPairAt = 0
+  #lastReclaimAt = 0
+  #reclaimFailures = 0
+  #reclaimLockedUntil = 0
 
-  constructor({ key, serial, onViewer, onGone, onMessage, onPair, log }) {
+  constructor({ key, serial, onViewer, onGone, onMessage, onPair, onReclaim, log }) {
     this.#key = Buffer.from(key, 'utf8')
     this.#serial = serial
     this.#onViewer = onViewer
     this.#onGone = onGone
     this.#onMessage = onMessage
     this.#onPair = onPair
+    this.#onReclaim = onReclaim
     this.log = log
   }
 
@@ -185,6 +205,15 @@ export class LocalServer {
             return
           }
 
+          // A phone claiming the house rather than asking to join it. Being on the wifi is not
+          // the claim here — knowing the intercom's own admin password is, and that is checked
+          // against the intercom before anything is handed back.
+          const password = this.#wantsReclaim(payload)
+          if (password !== null) {
+            void this.#reclaim(session, password)
+            return
+          }
+
           if (!this.#greet(payload)) return reject('wrong key')
           session.greeted = true
           this.#pending.delete(session)
@@ -214,6 +243,75 @@ export class LocalServer {
       return JSON.parse(payload.subarray(1).toString('utf8')).pair === true
     } catch {
       return false
+    }
+  }
+
+  /** The password offered, or null when this is not a reclaim at all. */
+  #wantsReclaim(payload) {
+    if (payload[0] !== KIND_JSON) return null
+    try {
+      const asked = JSON.parse(payload.subarray(1).toString('utf8'))
+      if (asked.reclaim !== true) return null
+      return String(asked.password ?? '').slice(0, MAX_PASSWORD_LENGTH)
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Claims the household with the intercom's own admin password.
+   *
+   * This is the wall that keeps the house wifi from being a way to take the house. Reaching this
+   * port proves somebody is inside a building; it does not tell a family from the neighbour who
+   * was given the wifi password at a barbecue two summers ago. So becoming an admin asks for a
+   * thing the wifi cannot supply, and the agent puts it to the intercom rather than deciding for
+   * itself — it authenticates there constantly and has no other opinion worth having.
+   *
+   * The reward is the ordinary pairing code, minted as though it had been read off this
+   * machine's own screen. So the Worker learns no new way to trust anybody, and this also
+   * quietly removes the recovery cliff of a headless box: nobody has to find an SSH client to
+   * get back into their own gate.
+   */
+  async #reclaim(session, password) {
+    const send = (payload) => {
+      const body = Buffer.from(JSON.stringify(payload), 'utf8')
+      write(session.socket, Buffer.concat([Buffer.from([KIND_JSON]), body]))
+    }
+
+    const done = (payload) => {
+      send(payload)
+      session.socket.end()
+    }
+
+    const now = Date.now()
+    if (now < this.#reclaimLockedUntil) {
+      return done({ type: 'reclaim-error', error: 'locked out' })
+    }
+    if (now - this.#lastReclaimAt < RECLAIM_COOLDOWN_MS) {
+      return done({ type: 'reclaim-error', error: 'too soon' })
+    }
+    this.#lastReclaimAt = now
+
+    this.log(`local: ${session.socket.remoteAddress} is claiming the household`)
+
+    if (!(await this.#onReclaim(password))) {
+      this.#reclaimFailures += 1
+      if (this.#reclaimFailures >= RECLAIM_MAX_FAILURES) {
+        this.#reclaimLockedUntil = Date.now() + RECLAIM_LOCKOUT_MS
+        this.#reclaimFailures = 0
+        this.log('local: too many wrong intercom passwords; no more for fifteen minutes')
+      }
+      return done({ type: 'reclaim-error', error: 'wrong password' })
+    }
+
+    this.#reclaimFailures = 0
+
+    try {
+      const code = await this.#onPair('console')
+      done({ type: 'pair', serial: this.#serial, code })
+    } catch (error) {
+      this.log(`local: could not get a pairing code — ${error.message}`)
+      done({ type: 'reclaim-error', error: 'no code' })
     }
   }
 
@@ -249,7 +347,7 @@ export class LocalServer {
     this.log(`local: ${session.socket.remoteAddress} is asking to pair`)
 
     try {
-      const code = await this.#onPair()
+      const code = await this.#onPair('local')
       send({ type: 'pair', serial: this.#serial, code })
     } catch (error) {
       this.log(`local: could not get a pairing code — ${error.message}`)

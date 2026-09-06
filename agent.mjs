@@ -14,7 +14,7 @@
 // `--watch` skips the Worker entirely and just prints intercom events, which is how the
 // doorbell's own event code was identified.
 
-import { randomBytes } from 'node:crypto'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
@@ -34,7 +34,7 @@ import { WebSocketClient as WebSocket } from './ws.mjs'
  * Where the Worker lives. Built in rather than asked for: it is the same address for every
  * house, and a question with one right answer is a question that should not be asked.
  */
-const DEFAULT_WORKER_URL = 'https://ajar-api.romeo-onisim.workers.dev'
+const DEFAULT_WORKER_URL = 'https://ajar-api.codebldr.workers.dev'
 
 /**
  * Settings live in a file rather than the environment because the intercom password would
@@ -168,6 +168,52 @@ function ensureLocalKey() {
   if (config.localKey) return
   config.localKey = randomBytes(32).toString('base64url')
   writeConfig({ localKey: config.localKey })
+}
+
+/**
+ * Whether somebody knows the intercom's own admin password.
+ *
+ * The question behind a phone on the house wifi asking to run the household. Everyone in the
+ * building can reach this machine; only the household knows what is typed into the intercom's
+ * own web page, and it is a thing they can find without an SSH client.
+ *
+ * The password on file is checked first, and not to save a round trip: the intercom locks itself
+ * out after a handful of wrong answers, and a household that got its own password right should
+ * never be able to lock its front door against itself by typing it twice. Anything else is put
+ * to the device, which is the only authority on the subject — and a password that works there
+ * and not here means somebody changed it, so it is kept. Without that the agent goes deaf on
+ * its next reconnect, which is the fault this whole path exists to undo.
+ */
+async function intercomAccepts(password) {
+  if (!password) return false
+  if (sameSecret(password, config.password)) return true
+  if (!config.host) return false
+
+  try {
+    await digestGet({
+      host: config.host,
+      port: config.port,
+      username: config.username,
+      password,
+      path: '/cgi-bin/magicBox.cgi?action=getSerialNo',
+      timeoutMs: 6_000,
+    })
+  } catch {
+    return false
+  }
+
+  config.password = password
+  writeConfig({ password })
+  log('the intercom accepted a password this agent did not have; keeping it')
+
+  return true
+}
+
+/** Compared without letting the time it takes say how much of it was right. */
+function sameSecret(offered, known) {
+  const a = Buffer.from(String(offered), 'utf8')
+  const b = Buffer.from(String(known ?? ''), 'utf8')
+  return b.length > 0 && a.length === b.length && timingSafeEqual(a, b)
 }
 
 const watchOnly = process.argv.includes('--watch')
@@ -510,7 +556,7 @@ class WorkerLink {
    * house. Passing it a code is how that proof is turned into something the Worker will accept,
    * without teaching the Worker a second way to trust anybody.
    */
-  requestPairingCode() {
+  requestPairingCode(via = 'local') {
     if (!this.#socket || this.#socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('not connected to the server'))
     }
@@ -522,11 +568,12 @@ class WorkerLink {
       }, PAIR_REQUEST_TIMEOUT_MS)
 
       this.#pairWaiting.push({ resolve, timer })
-      // Said out loud: this code is going to a phone that reached the agent across the house
-      // network, not to somebody reading it off the screen of the machine it runs on. The
-      // Worker treats the two differently — a code handed out this way joins a household
-      // rather than taking it over.
-      this.send({ type: 'pair-request', via: 'local' })
+      // Said out loud, because the Worker treats the two claims differently. `local` means a
+      // phone that reached this machine across the house network and nothing more, and joins a
+      // household as somebody waiting to be let in. Anything else means a claim the wifi cannot
+      // make — a code read off this machine's own screen, or the intercom's admin password
+      // proved against the intercom — and becomes an admin.
+      this.send({ type: 'pair-request', via })
     })
   }
 
@@ -1688,7 +1735,8 @@ async function main() {
           audience.remove(sink)
         },
         onMessage: (message, viewer) => void handleViewerMessage(message, viewer),
-        onPair: () => link.requestPairingCode(),
+        onPair: (via) => link.requestPairingCode(via),
+        onReclaim: (password) => intercomAccepts(password),
         log,
       })
   localServer?.start()
