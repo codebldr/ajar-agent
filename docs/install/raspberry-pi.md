@@ -10,7 +10,9 @@ itself, and it is never away from the house when the doorbell rings.
 
 - The intercom's password — the one its own web page asks for. Not your Ajar account, not the
   manufacturer's app account.
-- The Pi on the **same network as the intercom**, ideally on a cable.
+- The Pi on the **same network as the intercom and your phones**, ideally on a cable. In a house
+  with two routers, that means the router your phones join — not a separate one, or the app reaches
+  the gate only through the internet, and pairing falls back to reading a code from the log.
 - Raspberry Pi OS, or any Linux. A Pi 3 is plenty; a Pi Zero 2 W works.
 - On wifi, the **2.4 GHz network**. A Pi 3 and a Pi Zero 2 W have no 5 GHz radio, and Raspberry
   Pi Imager fills the wifi in for you from the network the computer writing the card is on —

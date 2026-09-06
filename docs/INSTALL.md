@@ -30,8 +30,12 @@ by itself, and asks the intercom for its serial number rather than making you fi
 **The machine needs three things**, and no more:
 
 - **Node 18 or newer**, except in Docker and Home Assistant, which bring their own.
-- **The same network as the intercom.** The agent finds it by broadcasting, which does not cross
-  routers. An intercom behind a second router can still be named directly.
+- **The same network as the intercom — and as your phones.** The agent finds the intercom by
+  broadcasting, and the app finds the agent the same way; neither broadcast crosses a router. An
+  intercom behind a second router can still be named directly, but a phone cannot reach an agent
+  stranded on one. In a house with two routers, put the agent on the one your phones join —
+  otherwise pairing falls back to reading a code from the log, and the camera works only through
+  the internet: slower, and only while the connection holds.
 - **An outbound internet connection.** The agent dials out; nothing dials in, so there are no
   ports to forward, no VPN, and no public address.
 
