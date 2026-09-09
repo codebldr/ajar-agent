@@ -1370,9 +1370,14 @@ async function handleViewerMessage(message, viewer = null) {
       {
         const visit = history.beginVisit({ code: 'AjarTestRing' })
         if (visit.clip) recorder.start(history.sink, history.quality)
-      }
 
-      link.send({ type: 'ring', deviceId: config.deviceId, code: 'AjarTestRing' })
+        link.send({
+          type: 'ring',
+          deviceId: config.deviceId,
+          code: 'AjarTestRing',
+          ...(visit.id ? { visitId: visit.id } : {}),
+        })
+      }
       return
 
     case 'binary': {
@@ -1796,8 +1801,15 @@ async function main() {
         // worth keeping. Joining the audience is what opens the camera — the same single
         // stream a phone would be given, not a second one — and the recording carries on
         // through being answered, because who came and what was said is the part worth having.
+        // The visit's id goes up with the ring, because the picture taken for the visit is the
+        // one thing a phone can show while the video is still connecting — or never does,
+        // which on a phone with one bar of signal is most of the time. The picture is being
+        // taken as this is sent; the phone asks for it a moment later, and asks again if it is
+        // not there yet.
+        let visitId = ''
         if (kind === 'ring' && !duplicateRing) {
           const visit = history.beginVisit({ code: event.code })
+          visitId = visit.id
           if (visit.clip) recorder.start(history.sink, history.quality)
         }
 
@@ -1821,7 +1833,12 @@ async function main() {
         if (kind === 'cancelled') history.endVisit('the call ended')
 
         if (!kind || !link || duplicateRing) return
-        link.send({ type: kind, deviceId: config.deviceId, code: event.code })
+        link.send({
+          type: kind,
+          deviceId: config.deviceId,
+          code: event.code,
+          ...(visitId ? { visitId } : {}),
+        })
       }, controller.signal)
 
       if (controller.signal.aborted) return
