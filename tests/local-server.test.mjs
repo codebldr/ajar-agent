@@ -26,6 +26,26 @@ let sinks = []
 const said = (fragment) => messages.some((line) => line.includes(fragment))
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+/** Every JSON message the server sends down a socket, as they arrive. */
+function answersOn(socket) {
+  const answers = []
+  let buffer = Buffer.alloc(0)
+  socket.on('data', (chunk) => {
+    buffer = Buffer.concat([buffer, chunk])
+    while (buffer.length >= 4) {
+      const length = buffer.readUInt32BE(0)
+      if (buffer.length < 4 + length) return
+      const payload = buffer.subarray(4, 4 + length)
+      buffer = buffer.subarray(4 + length)
+      if (payload[0] === 0) answers.push(JSON.parse(payload.subarray(1).toString('utf8')))
+    }
+  })
+  return answers
+}
+
+/** How long the test server makes a test ring wait, so the suite does not sit out ten seconds. */
+const TEST_RING_COOLDOWN_MS = 300
+
 /** One length-prefixed frame, the shape both ends speak. */
 const framed = (payload) => {
   const header = Buffer.alloc(4)
@@ -68,6 +88,7 @@ describe('the house network server', () => {
       },
       onReclaim: async (password) => password === INTERCOM_PASSWORD,
       log: (line) => messages.push(line),
+      testRingCooldownMs: TEST_RING_COOLDOWN_MS,
     })
     server.start()
     await pause(150)
@@ -204,15 +225,33 @@ describe('the house network server', () => {
     await pause(100)
   })
 
-  test('rings the house for a test once a minute, however often it is asked', async () => {
+  test('rings the house for a test only so often, and says so when it will not', async () => {
     received = []
-    const viewer = await talk(jsonFrame({ key: 'a-brand-new-key' }), { keepOpen: true })
-
-    for (let i = 0; i < 5; i += 1) viewer.socket.write(jsonFrame({ type: 'test-ring' }))
+    const socket = connect(LOCAL_PORT, '127.0.0.1').on('error', () => {})
+    const answers = answersOn(socket)
+    await new Promise((resolve) => socket.on('connect', resolve))
+    socket.write(jsonFrame({ key: 'a-brand-new-key' }))
     await pause(100)
 
-    assert.equal(received.filter((message) => message.type === 'test-ring').length, 1)
-    viewer.socket.destroy()
+    for (let i = 0; i < 5; i += 1) socket.write(jsonFrame({ type: 'test-ring' }))
+    await pause(100)
+
+    const rings = () => received.filter((message) => message.type === 'test-ring').length
+    assert.equal(rings(), 1, 'one ring for five asks in a row')
+
+    // Somebody testing the app must not be left waiting for a ring that was quietly dropped.
+    const refusals = answers.filter((answer) => answer.type === 'test-ring-error')
+    assert.equal(refusals.length, 4, 'every ask that did not ring is told so')
+    assert.equal(refusals[0].error, 'too soon')
+    assert.ok(refusals[0].retryInSec >= 1, 'and told how long to wait')
+
+    // Once the wait is over, the next one rings.
+    await pause(TEST_RING_COOLDOWN_MS)
+    socket.write(jsonFrame({ type: 'test-ring' }))
+    await pause(100)
+    assert.equal(rings(), 2, 'a test ring after the wait goes through')
+
+    socket.destroy()
     await pause(100)
   })
 

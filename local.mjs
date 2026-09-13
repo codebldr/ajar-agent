@@ -49,13 +49,18 @@ const MAX_PENDING = 32
 const PAIR_COOLDOWN_MS = 3_000
 
 /**
- * One rehearsal of the doorbell a minute.
+ * How long a rehearsal of the doorbell waits for the one before it.
  *
  * A test ring is a real visit as far as everything downstream is concerned: a line in the
  * history, a picture, a recording, and a push to every phone in the house. Asked for in a loop by
  * a guest, it filled the history with rehearsals and pushed the real visits out of it.
+ *
+ * Ten seconds, not a minute: somebody testing the app rings, answers, and rings again, and a
+ * minute in between was a ring that seemed to go missing. Six an hour would stop a tester; six a
+ * minute does not help anybody flood anything. An ask that comes too soon is told so, with how
+ * long to wait, rather than dropped without a word.
  */
-const TEST_RING_COOLDOWN_MS = 60_000
+const TEST_RING_COOLDOWN_MS = 10_000
 
 /**
  * How much may wait to be sent to one phone before it is let go.
@@ -119,11 +124,23 @@ export class LocalServer {
   #reclaimFailures = 0
   #reclaimLockedUntil = 0
   #lastTestRingAt = 0
+  #testRingCooldownMs
   #refusalWindowStartedAt = 0
   #refusalsLogged = 0
   #refusalsUnsaid = 0
 
-  constructor({ key, serial, onViewer, onGone, onMessage, onPair, onReclaim, log }) {
+  constructor({
+    key,
+    serial,
+    onViewer,
+    onGone,
+    onMessage,
+    onPair,
+    onReclaim,
+    log,
+    // Shorter only in tests, which should not sit out the real wait.
+    testRingCooldownMs = TEST_RING_COOLDOWN_MS,
+  }) {
     this.#key = Buffer.from(key, 'utf8')
     this.#serial = serial
     this.#onViewer = onViewer
@@ -131,6 +148,7 @@ export class LocalServer {
     this.#onMessage = onMessage
     this.#onPair = onPair
     this.#onReclaim = onReclaim
+    this.#testRingCooldownMs = testRingCooldownMs
     this.log = log
   }
 
@@ -437,14 +455,23 @@ export class LocalServer {
    * every phone here presents the same household key — so this end cannot tell the guest who
    * may from the one who may not. The Worker can, and the app asks it even from the hallway.
    *
-   * And a test ring more than once a minute. See `TEST_RING_COOLDOWN_MS`.
+   * And a test ring too soon after the last one, which is answered with how long to wait. See
+   * `TEST_RING_COOLDOWN_MS`.
    */
-  #allowed(message) {
+  #allowed(message, session) {
     if (typeof message.type === 'string' && message.type.startsWith('history-')) return false
 
     if (message.type === 'test-ring') {
       const now = Date.now()
-      if (now - this.#lastTestRingAt < TEST_RING_COOLDOWN_MS) return false
+      const waitMs = this.#lastTestRingAt + this.#testRingCooldownMs - now
+      if (waitMs > 0) {
+        this.#sink(session).send({
+          type: 'test-ring-error',
+          error: 'too soon',
+          retryInSec: Math.ceil(waitMs / 1000),
+        })
+        return false
+      }
       this.#lastTestRingAt = now
     }
 
@@ -456,7 +483,7 @@ export class LocalServer {
     if (payload[0] === KIND_JSON) {
       try {
         const message = JSON.parse(payload.subarray(1).toString('utf8'))
-        if (!this.#allowed(message)) return
+        if (!this.#allowed(message, session)) return
         // Handed the viewer's own way back as well as the message: what a phone asks for is
         // mostly broadcast to everyone watching, but an answer to a question belongs to the
         // phone that asked it.

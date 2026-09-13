@@ -48,14 +48,44 @@ const socket = connect(LOCAL_PORT, host)
 socket.on('connect', () => {
   socket.write(message({ key }))
   socket.write(message({ type: 'test-ring' }))
-  console.log(`asked the agent at ${host} to report a doorbell press`)
 
-  // The agent answers nothing to this — the answer arrives on somebody's phone. A moment is
-  // left for the bytes to leave before the socket closes under them.
+  // A ring that goes through is answered on somebody's phone, not here. One asked for too soon
+  // after the last is answered here, with how long to wait — so a moment is left for that, and
+  // for the bytes to leave before the socket closes under them.
   setTimeout(() => {
+    console.log(`asked the agent at ${host} to report a doorbell press`)
     socket.destroy()
     process.exit(0)
   }, 500)
+})
+
+// Everything the agent says back. Camera frames arrive too, because a key holder is a viewer;
+// only its JSON messages are read, and only a refusal matters.
+let received = Buffer.alloc(0)
+socket.on('data', (chunk) => {
+  received = Buffer.concat([received, chunk])
+  while (received.length >= 4) {
+    const length = received.readUInt32BE(0)
+    if (received.length < 4 + length) return
+    const payload = received.subarray(4, 4 + length)
+    received = received.subarray(4 + length)
+    if (payload[0] !== 0) continue
+
+    let answer
+    try {
+      answer = JSON.parse(payload.subarray(1).toString('utf8'))
+    } catch {
+      continue
+    }
+    if (answer.type !== 'test-ring-error') continue
+
+    console.error(
+      `the agent did not ring: ${answer.error}` +
+        (answer.retryInSec ? ` — try again in ${answer.retryInSec}s` : '')
+    )
+    socket.destroy()
+    process.exit(1)
+  }
 })
 
 socket.on('error', (error) => {

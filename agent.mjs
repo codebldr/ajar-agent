@@ -1815,6 +1815,7 @@ async function main() {
   })
 
   let backoffMs = 1_000
+  let refusedInARow = 0
 
   // The event channel is the agent's only way of knowing someone is at the gate, so it is
   // rebuilt for as long as the process lives.
@@ -1892,10 +1893,17 @@ async function main() {
       // retried promptly, the way the intercom's nightly hang-up always has been. The wait used
       // to be reset at the top of every attempt instead, so it never grew at all — a password
       // changed at the intercom became one wrong login a second, for ever.
-      if (Date.now() - attachedAt >= HEALTHY_ATTACH_MS) backoffMs = 1_000
+      if (Date.now() - attachedAt >= HEALTHY_ATTACH_MS) {
+        backoffMs = 1_000
+        refusedInARow = 0
+      }
 
-      const refused = error.message.includes('401')
-      const waitMs = refused ? INTERCOM_AUTH_RETRY_MS : backoffMs
+      // A refused login is tried again quickly, twice. One refusal can be the intercom's
+      // hiccup — just back from a reboot, say — and waiting five minutes on it would be a
+      // doorbell deaf for nothing. Three in a row is a password that no longer works.
+      refusedInARow = error.message.includes('401') ? refusedInARow + 1 : 0
+      const waitMs =
+        refusedInARow >= INTERCOM_REFUSALS_BEFORE_PAUSE ? INTERCOM_AUTH_RETRY_MS : backoffMs
       log(`intercom: ${error.message} — retrying in ${waitMs}ms`)
 
       const woken = await new Promise((resolve) => {
@@ -1907,6 +1915,7 @@ async function main() {
       })
       wakeIntercom = null
 
+      if (woken) refusedInARow = 0
       backoffMs = woken ? 1_000 : Math.min(backoffMs * 2, INTERCOM_RETRY_MAX_MS)
     }
   }
@@ -1921,13 +1930,15 @@ async function main() {
 const INTERCOM_RETRY_MAX_MS = 10_000
 
 /**
- * How long a refused login waits.
+ * How long the agent waits once its logins keep being refused.
  *
- * The intercom locks its own account after a handful of wrong passwords, and that lockout is the
- * household's too — their own app and web page stop working. Five minutes apart, the agent cannot
+ * The intercom locks its own account after a handful of wrong passwords — five, on the Dahua
+ * units this runs against — and that lockout is the household's too: their own app and web page
+ * stop working. Three quick tries stay under it; five minutes apart after that, the agent cannot
  * keep it shut. A right password proved in the meantime wakes the loop at once; see
  * `wakeIntercom`.
  */
+const INTERCOM_REFUSALS_BEFORE_PAUSE = 3
 const INTERCOM_AUTH_RETRY_MS = 5 * 60_000
 
 /** A channel that stayed up this long was working; its ending starts the waits afresh. */
