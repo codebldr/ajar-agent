@@ -39,7 +39,19 @@ else
 fi
 
 SOURCE_URL=${AJAR_SOURCE_URL:-https://github.com/codebldr/ajar-agent/archive/refs/heads/main.tar.gz}
-SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd) || SOURCE_DIR=
+
+# Only a script run as a file has a directory of its own. Piped through sh, $0 is the name of the
+# shell and its dirname is "." — so whatever agent.mjs happened to be in the current folder, an
+# old copy or one somebody left in /tmp, was installed instead of the download, as root, and then
+# handed the intercom's password.
+SOURCE_DIR=
+case "$0" in
+  install.sh | */install.sh)
+    if [ -f "$0" ]; then
+      SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd) || SOURCE_DIR=
+    fi
+    ;;
+esac
 
 # Piped through sh there is no directory to have been run from, so the agent is fetched. Run
 # from a checkout, what is already on disk wins — that is the version somebody is working on.

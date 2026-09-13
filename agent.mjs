@@ -15,7 +15,18 @@
 // doorbell's own event code was identified.
 
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  closeSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { createInterface } from 'node:readline/promises'
@@ -119,11 +130,33 @@ function readConfigFile(path) {
  */
 function writeConfig(patch) {
   const current = readConfigFile(CONFIG_PATH)
+  const contents = JSON.stringify({ ...current, ...patch }, null, 2)
 
   mkdirSync(dirname(CONFIG_PATH), { recursive: true, mode: 0o700 })
-  writeFileSync(CONFIG_PATH, JSON.stringify({ ...current, ...patch }, null, 2), {
-    mode: 0o600,
-  })
+
+  // Written beside the real file, flushed, and moved over it. Truncating agent.json in place
+  // meant a power cut mid-write left it empty — and an agent that reads an empty file believes
+  // it was never set up, mints itself a new secret, and is refused by the Worker for ever,
+  // because the device is already claimed by the old one.
+  const temporary = `${CONFIG_PATH}.new`
+  try {
+    const handle = openSync(temporary, 'w', 0o600)
+    try {
+      writeSync(handle, contents)
+      fsyncSync(handle)
+    } finally {
+      closeSync(handle)
+    }
+    chmodSync(temporary, 0o600)
+    renameSync(temporary, CONFIG_PATH)
+    return
+  } catch {
+    // A file mounted into a container on its own, rather than the folder it sits in, cannot be
+    // replaced — only written to. The old way still works there.
+    rmSync(temporary, { force: true })
+  }
+
+  writeFileSync(CONFIG_PATH, contents, { mode: 0o600 })
   chmodSync(CONFIG_PATH, 0o600)
 }
 
@@ -184,6 +217,15 @@ function ensureLocalKey() {
  * and not here means somebody changed it, so it is kept. Without that the agent goes deaf on
  * its next reconnect, which is the fault this whole path exists to undo.
  */
+/**
+ * Cuts short the wait before the next attempt at the intercom's event channel.
+ *
+ * A wrong password is retried slowly, so as not to keep the intercom's own lockout shut against
+ * the household (see `INTERCOM_AUTH_RETRY_MS`). The moment a right one is proved, waiting any
+ * longer would only be a doorbell that stays deaf for no reason — so proving one wakes the loop.
+ */
+let wakeIntercom = null
+
 async function intercomAccepts(password) {
   if (!password) return false
   if (sameSecret(password, config.password)) return true
@@ -205,6 +247,7 @@ async function intercomAccepts(password) {
   config.password = password
   writeConfig({ password })
   log('the intercom accepted a password this agent did not have; keeping it')
+  wakeIntercom?.()
 
   return true
 }
@@ -1233,9 +1276,11 @@ function stopPlayback(viewer) {
 /**
  * What a viewer is allowed to ask for, from either direction.
  *
- * Deliberately the same short list on both: a phone on the house network is closer to the
- * gate but is not more trusted than one on the far side of the world, and this is the only
- * place that decides what a viewer can do at all.
+ * One list for both: a phone on the house network is closer to the gate but is not more trusted
+ * than one on the far side of the world. If anything it is trusted less — every phone there
+ * presents the same household key, so the house network server holds back what only the Worker
+ * can ration per phone (the history) before a message ever reaches this. See
+ * `LocalServer.#allowed`.
  */
 async function handleViewerMessage(message, viewer = null) {
   switch (message.type) {
@@ -1774,9 +1819,9 @@ async function main() {
   // The event channel is the agent's only way of knowing someone is at the gate, so it is
   // rebuilt for as long as the process lives.
   for (;;) {
+    const attachedAt = Date.now()
     try {
       log(`intercom: attaching to events at ${config.host}`)
-      backoffMs = 1_000
 
       await attachEvents((event) => {
         const kind = classify(event)
@@ -1843,12 +1888,50 @@ async function main() {
 
       if (controller.signal.aborted) return
     } catch (error) {
-      log(`intercom: ${error.message} — retrying in ${backoffMs}ms`)
-      await new Promise((resolve) => setTimeout(resolve, backoffMs))
-      backoffMs = Math.min(backoffMs * 2, 30_000)
+      // A channel that held for a while was a real connection, and whatever ended it is news:
+      // retried promptly, the way the intercom's nightly hang-up always has been. The wait used
+      // to be reset at the top of every attempt instead, so it never grew at all — a password
+      // changed at the intercom became one wrong login a second, for ever.
+      if (Date.now() - attachedAt >= HEALTHY_ATTACH_MS) backoffMs = 1_000
+
+      const refused = error.message.includes('401')
+      const waitMs = refused ? INTERCOM_AUTH_RETRY_MS : backoffMs
+      log(`intercom: ${error.message} — retrying in ${waitMs}ms`)
+
+      const woken = await new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(false), waitMs)
+        wakeIntercom = () => {
+          clearTimeout(timer)
+          resolve(true)
+        }
+      })
+      wakeIntercom = null
+
+      backoffMs = woken ? 1_000 : Math.min(backoffMs * 2, INTERCOM_RETRY_MAX_MS)
     }
   }
 }
+
+/**
+ * How long a failed attempt at the event channel waits before the next, at most.
+ *
+ * Ten seconds, not more: while this is waiting nobody's doorbell reaches a phone, and an
+ * intercom coming back from a power cut should be heard from within moments of being up.
+ */
+const INTERCOM_RETRY_MAX_MS = 10_000
+
+/**
+ * How long a refused login waits.
+ *
+ * The intercom locks its own account after a handful of wrong passwords, and that lockout is the
+ * household's too — their own app and web page stop working. Five minutes apart, the agent cannot
+ * keep it shut. A right password proved in the meantime wakes the loop at once; see
+ * `wakeIntercom`.
+ */
+const INTERCOM_AUTH_RETRY_MS = 5 * 60_000
+
+/** A channel that stayed up this long was working; its ending starts the waits afresh. */
+const HEALTHY_ATTACH_MS = 60_000
 
 // Anything reaching here has already been through every retry the agent has. Said plainly and
 // then out, rather than dying with a stack trace nobody reads and an exit code that says fine.

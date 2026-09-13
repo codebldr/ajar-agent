@@ -16,6 +16,7 @@
 // with no room left to write is a house with no doorbell.
 
 import {
+  chmodSync,
   closeSync,
   createWriteStream,
   existsSync,
@@ -63,6 +64,31 @@ const MAX_AGE_MS = 365 * 24 * 60 * 60 * 1000
 /** A visit that was never closed — the agent was killed mid-recording — is not kept open for ever. */
 const STALE_VISIT_MS = 5 * 60 * 1000
 
+/**
+ * Nor more lines than this, however small they are.
+ *
+ * The size ceiling counts clips and pictures, and a visit cut short has neither — so a flood of
+ * them grew an index that is read whole at every start without ever touching the ceiling. Twenty
+ * thousand is a year of a busy house: two dozen rings and as many gate openings a day.
+ */
+const MAX_ENTRIES = 20_000
+
+/**
+ * The only names a clip or a picture is ever given: the visit's id and an extension.
+ *
+ * Checked on the way back out of the index as well as used on the way in, because the index is
+ * a file on somebody's disk and the name in it is joined onto a folder. "../../agent.json" is a
+ * name too.
+ */
+const OWN_FILE = /^\d+-[0-9a-f]{6}\.(ajr|jpg)$/
+
+/**
+ * Readable by whoever runs the agent and nobody else. A year of video, and of who opened the
+ * gate when, is not for every other program on a shared box.
+ */
+const PRIVATE_DIR = 0o700
+const PRIVATE_FILE = 0o600
+
 const FRAME_LENGTH_BYTES = 4
 
 /** Four bytes of length, four of how long after the ring it arrived. */
@@ -92,6 +118,7 @@ export class History {
   #log
   #snapshot
   #maxBytes = MAX_BYTES_CEILING
+  #maxEntries = MAX_ENTRIES
   #askedForBytes = null
   #entries = []
   #bytes = 0
@@ -114,6 +141,7 @@ export class History {
    * @param log       the agent's logger
    * @param snapshot  async () => Buffer — a still from the gate camera, or null
    * @param maxBytes  a ceiling of somebody's choosing; otherwise one is worked out from the disk
+   * @param maxEntries how many lines the history may hold; `MAX_ENTRIES` unless a test says less
    * @param recordMs  how long a clip may run
    * @param enabled   whether to record video at all
    * @param onSettings called when the settings change, to write them down somewhere lasting
@@ -124,6 +152,7 @@ export class History {
     log,
     snapshot,
     maxBytes = null,
+    maxEntries = null,
     recordMs = null,
     enabled = true,
     quality = 'sd',
@@ -134,6 +163,7 @@ export class History {
     this.#log = log
     this.#snapshot = snapshot
     this.#askedForBytes = maxBytes
+    this.#maxEntries = maxEntries ?? MAX_ENTRIES
     this.#recordMs = recordMs ? clamp(recordMs, RECORD_MS_RANGE) : RECORD_LIMIT_MS
     this.#enabled = enabled !== false
     this.#quality = quality === 'hd' ? 'hd' : 'sd'
@@ -163,7 +193,7 @@ export class History {
     // `main()` as "the agent stopped" — a house with no gate because it could not keep a video.
     try {
       for (const path of [this.#dir, join(this.#dir, CLIP_DIR), join(this.#dir, THUMB_DIR)]) {
-        mkdirSync(path, { recursive: true })
+        mkdirSync(path, { recursive: true, mode: PRIVATE_DIR })
       }
 
       // Making the folders is not the same as being allowed to write in them, and the second
@@ -184,6 +214,7 @@ export class History {
     }
 
     this.#warnIfInsideTheContainer()
+    this.#closeUp()
 
     const free = await this.#freeBytes()
     if (this.#askedForBytes) {
@@ -394,7 +425,7 @@ export class History {
     }
 
     const path = join(this.#dir, CLIP_DIR, `${entry.id}.ajr`)
-    this.#stream = createWriteStream(path)
+    this.#stream = createWriteStream(path, { mode: PRIVATE_FILE })
     this.#stream.on('error', (error) => {
       this.#log(`history: cannot write the clip — ${error.message}`)
       this.#stream = null
@@ -522,7 +553,7 @@ export class History {
     try {
       const image = await this.#snapshot()
       if (!image?.length) return
-      writeFileSync(join(this.#dir, THUMB_DIR, `${entry.id}.jpg`), image)
+      writeFileSync(join(this.#dir, THUMB_DIR, `${entry.id}.jpg`), image, { mode: PRIVATE_FILE })
       entry.thumb = `${entry.id}.jpg`
       entry.bytes = (entry.bytes ?? 0) + image.length
       this.#rewrite(entry)
@@ -548,17 +579,18 @@ export class History {
   }
 
   clipPath(id) {
-    const entry = this.entry(id)
-    if (!entry?.clip) return null
-    const path = join(this.#dir, CLIP_DIR, entry.clip)
-    return existsSync(path) ? path : null
+    const path = this.#own(CLIP_DIR, this.entry(id)?.clip)
+    return path && existsSync(path) ? path : null
   }
 
   thumbPath(id) {
-    const entry = this.entry(id)
-    if (!entry?.thumb) return null
-    const path = join(this.#dir, THUMB_DIR, entry.thumb)
-    return existsSync(path) ? path : null
+    const path = this.#own(THUMB_DIR, this.entry(id)?.thumb)
+    return path && existsSync(path) ? path : null
+  }
+
+  /** Where a file named in the index lives — or null, when the name is not one this wrote. */
+  #own(folder, name) {
+    return typeof name === 'string' && OWN_FILE.test(name) ? join(this.#dir, folder, name) : null
   }
 
   /**
@@ -708,7 +740,7 @@ export class History {
   #append(entry) {
     this.#entries.push(entry)
     try {
-      writeFileSync(this.#indexPath(), `${JSON.stringify(entry)}\n`, { flag: 'a' })
+      writeFileSync(this.#indexPath(), `${JSON.stringify(entry)}\n`, { flag: 'a', mode: PRIVATE_FILE })
     } catch (error) {
       this.#log(`history: cannot write the index — ${error.message}`)
     }
@@ -717,7 +749,7 @@ export class History {
   /** Corrections are appended too; `#load` collapses them. The file is rewritten only by a sweep. */
   #rewrite(entry) {
     try {
-      writeFileSync(this.#indexPath(), `${JSON.stringify(entry)}\n`, { flag: 'a' })
+      writeFileSync(this.#indexPath(), `${JSON.stringify(entry)}\n`, { flag: 'a', mode: PRIVATE_FILE })
     } catch (error) {
       this.#log(`history: cannot write the index — ${error.message}`)
     }
@@ -768,6 +800,28 @@ export class History {
     }
   }
 
+  /**
+   * Narrows what an earlier version left readable to everybody.
+   *
+   * New folders and files are made private as they are made; this is for the ones that already
+   * exist. Each is tried on its own and a refusal is not an error: a NAS share owned by somebody
+   * else will not let its modes be changed, and a history that could not be made private is
+   * still better than none.
+   */
+  #closeUp() {
+    const folders = [this.#dir, join(this.#dir, CLIP_DIR), join(this.#dir, THUMB_DIR)]
+    for (const [path, mode] of [
+      ...folders.map((folder) => [folder, PRIVATE_DIR]),
+      [this.#indexPath(), PRIVATE_FILE],
+    ]) {
+      try {
+        if (existsSync(path)) chmodSync(path, mode)
+      } catch {
+        // See above.
+      }
+    }
+  }
+
   async #freeBytes() {
     try {
       const stats = await statfs(this.#dir)
@@ -795,7 +849,8 @@ export class History {
       const oldest = this.#entries[0]
       const tooOld = oldest.at < cutoff
       const tooBig = this.#bytes > this.#maxBytes
-      if (!tooOld && !tooBig) break
+      const tooMany = this.#entries.length > this.#maxEntries
+      if (!tooOld && !tooBig && !tooMany) break
 
       this.#entries.shift()
       this.#bytes = Math.max(0, this.#bytes - (oldest.bytes ?? 0))
@@ -810,10 +865,7 @@ export class History {
   }
 
   #delete(entry) {
-    for (const path of [
-      entry.clip ? join(this.#dir, CLIP_DIR, entry.clip) : null,
-      entry.thumb ? join(this.#dir, THUMB_DIR, entry.thumb) : null,
-    ]) {
+    for (const path of [this.#own(CLIP_DIR, entry.clip), this.#own(THUMB_DIR, entry.thumb)]) {
       if (path) rmSync(path, { force: true })
     }
   }
@@ -833,7 +885,9 @@ export class History {
   #compact() {
     const temporary = `${this.#indexPath()}.new`
     try {
-      writeFileSync(temporary, this.#entries.map((entry) => `${JSON.stringify(entry)}\n`).join(''))
+      writeFileSync(temporary, this.#entries.map((entry) => `${JSON.stringify(entry)}\n`).join(''), {
+        mode: PRIVATE_FILE,
+      })
       renameSync(temporary, this.#indexPath())
     } catch (error) {
       this.#log(`history: cannot tidy the index — ${error.message}`)

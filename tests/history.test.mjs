@@ -5,7 +5,16 @@
 // recording is a feature; a history that quietly fills somebody's disk is a fault, and the line
 // between them is the sweep.
 
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, describe, test } from 'node:test'
@@ -33,9 +42,11 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const quiet = () => {}
 
-async function opened(dir, { snapshot, maxBytes } = {}) {
-  return new History({ dir, log: quiet, snapshot, maxBytes }).ready()
+async function opened(dir, { snapshot, maxBytes, maxEntries } = {}) {
+  return new History({ dir, log: quiet, snapshot, maxBytes, maxEntries }).ready()
 }
+
+const permissions = (path) => statSync(path).mode & 0o777
 
 after(() => {
   for (const dir of roots) rmSync(dir, { recursive: true, force: true })
@@ -156,6 +167,71 @@ describe('the history', () => {
     const [latest] = history.list()
     assert.equal(latest.kind, 'gate')
     assert.equal(latest.openedBy, 'Blue fob')
+  })
+
+  test('does not follow a name in the index out of its own folder', async () => {
+    // The index is a file on somebody's disk, and on Home Assistant other add-ons can write to
+    // it. A picture's name there used to be joined onto the folder as it stood, so
+    // "../../agent.json" handed the intercom's password to the next phone that asked for a
+    // thumbnail — and the sweep would delete whatever such a name pointed at.
+    const parent = scratch()
+    const dir = join(parent, 'history')
+    mkdirSync(dir)
+    const secret = join(parent, 'agent.json')
+    writeFileSync(secret, '{"password":"the intercom password"}')
+
+    const planted = { id: '1000-abcdef', at: Date.now(), kind: 'ring', thumb: '../../agent.json', clip: '../../agent.json' }
+    writeFileSync(join(dir, 'index.jsonl'), `${JSON.stringify(planted)}\n`)
+
+    const history = await opened(dir)
+    assert.equal(history.thumbPath(planted.id), null, 'no picture that is not a picture')
+    assert.equal(history.clipPath(planted.id), null, 'no clip that is not a clip')
+    assert.equal(history.read(planted.id), null)
+
+    // Aged out, so the sweep drops it — and must drop only what is its own.
+    const ancient = { ...planted, id: '1-abcdef', at: 1 }
+    writeFileSync(join(dir, 'index.jsonl'), `${JSON.stringify(ancient)}\n`)
+    await opened(dir)
+    assert.ok(existsSync(secret), 'the sweep leaves files outside the history alone')
+  })
+
+  test('keeps its files to whoever runs it', async () => {
+    // On Home Assistant the history sits in /media, which other add-ons map and the media
+    // browser shows. A year of video and of who opened the gate is not for all of them.
+    const dir = join(scratch(), 'history')
+    const history = await opened(dir, { snapshot: async () => Buffer.from([0xff, 0xd8, 1]) })
+
+    const visit = history.beginVisit({ code: 'Invite' })
+    history.sink.send({ type: 'stream-config', sps: '', pps: '' })
+    history.sink.sendBinary(frame(1, 'a keyframe'))
+    await pause(20)
+    history.endVisit('done')
+    await pause(20)
+
+    assert.equal(permissions(dir), 0o700, 'the folder')
+    assert.equal(permissions(join(dir, 'index.jsonl')), 0o600, 'the index')
+    assert.equal(permissions(history.clipPath(visit.id)), 0o600, 'the clip')
+    assert.equal(permissions(history.thumbPath(visit.id)), 0o600, 'the picture')
+  })
+
+  test('keeps no more than so many entries', async () => {
+    // The size ceiling counts clips and pictures. A visit cut short has neither, so a flood of
+    // them grew the index — read whole at every start — without ever touching the ceiling.
+    const dir = scratch()
+    const history = await opened(dir, { maxEntries: 3 })
+
+    for (let i = 0; i < 5; i += 1) {
+      history.noteGateOpened({ by: `phone ${i}`, method: 'app' })
+    }
+    history.configure({})
+
+    const kept = history.list()
+    assert.equal(kept.length, 3)
+    assert.deepEqual(
+      kept.map((entry) => entry.openedBy),
+      ['phone 4', 'phone 3', 'phone 2'],
+      'the newest are the ones kept'
+    )
   })
 
   test('does not credit a phone with a gate somebody opened at the gate', async () => {

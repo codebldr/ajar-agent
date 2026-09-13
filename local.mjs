@@ -49,6 +49,37 @@ const MAX_PENDING = 32
 const PAIR_COOLDOWN_MS = 3_000
 
 /**
+ * One rehearsal of the doorbell a minute.
+ *
+ * A test ring is a real visit as far as everything downstream is concerned: a line in the
+ * history, a picture, a recording, and a push to every phone in the house. Asked for in a loop by
+ * a guest, it filled the history with rehearsals and pushed the real visits out of it.
+ */
+const TEST_RING_COOLDOWN_MS = 60_000
+
+/**
+ * How much may wait to be sent to one phone before it is let go.
+ *
+ * Fifteen to thirty seconds of HD video — far more than a wifi hiccup in the middle of a
+ * conversation at the gate, which must not cost anybody the call. A phone further behind than
+ * that is not watching; it has walked out of range or stopped reading, and TCP can take a quarter
+ * of an hour to notice.
+ */
+const MAX_QUEUED_BYTES = 8 * 1024 * 1024
+
+/** Probes a socket that has gone quiet, so a phone that vanished mid-stream is noticed. */
+const KEEPALIVE_MS = 30_000
+
+/**
+ * How many refusals are written down in a minute. The rest are counted and summed up.
+ *
+ * A refusal costs nothing to cause — open a socket, say the wrong thing, drop it — and on a NAS
+ * or a Mac nothing trims the log. Twenty a minute is every honest mistake a household makes.
+ */
+const REFUSALS_LOGGED_PER_WINDOW = 20
+const REFUSAL_WINDOW_MS = 60_000
+
+/**
  * How hard somebody may try the intercom's admin password from the house wifi.
  *
  * This is the wall between "on the wifi" and "runs the house", so it is the one thing here worth
@@ -87,6 +118,10 @@ export class LocalServer {
   #lastReclaimAt = 0
   #reclaimFailures = 0
   #reclaimLockedUntil = 0
+  #lastTestRingAt = 0
+  #refusalWindowStartedAt = 0
+  #refusalsLogged = 0
+  #refusalsUnsaid = 0
 
   constructor({ key, serial, onViewer, onGone, onMessage, onPair, onReclaim, log }) {
     this.#key = Buffer.from(key, 'utf8')
@@ -156,14 +191,19 @@ export class LocalServer {
 
   #accept(socket) {
     socket.setNoDelay(true)
+    socket.setKeepAlive(true, KEEPALIVE_MS)
 
     const session = { socket, greeted: false, buffer: Buffer.alloc(0) }
 
     const reject = (why) => {
-      this.log(`local: refused ${socket.remoteAddress} — ${why}`)
+      this.#refused(socket.remoteAddress, why)
       this.#pending.delete(session)
       socket.destroy()
     }
+
+    // This port is for the house. Everything it offers a stranger — a pairing request, a guess at
+    // the intercom's password — assumes the stranger is at least inside the building.
+    if (!isHouseAddress(socket.remoteAddress)) return reject('not on the house network')
 
     // Counted before anything is read. A flood of half-open connections costs nothing to make
     // and, unchecked, costs this machine everything it has.
@@ -370,14 +410,57 @@ export class LocalServer {
     return offered.length === this.#key.length && timingSafeEqual(offered, this.#key)
   }
 
+  /** Writes a refusal down, unless enough have been written down this minute already. */
+  #refused(address, why) {
+    const now = Date.now()
+    if (now - this.#refusalWindowStartedAt >= REFUSAL_WINDOW_MS) {
+      if (this.#refusalsUnsaid > 0) {
+        this.log(`local: refused ${this.#refusalsUnsaid} more in the last minute without saying so`)
+      }
+      this.#refusalWindowStartedAt = now
+      this.#refusalsLogged = 0
+      this.#refusalsUnsaid = 0
+    }
+
+    if (this.#refusalsLogged < REFUSALS_LOGGED_PER_WINDOW) {
+      this.#refusalsLogged += 1
+      this.log(`local: refused ${address} — ${why}`)
+    } else {
+      this.#refusalsUnsaid += 1
+    }
+  }
+
+  /**
+   * What a phone on the house network may not ask for, however good its key.
+   *
+   * The history, first. Whether a guest may read it is a switch an admin sets per phone, and
+   * every phone here presents the same household key — so this end cannot tell the guest who
+   * may from the one who may not. The Worker can, and the app asks it even from the hallway.
+   *
+   * And a test ring more than once a minute. See `TEST_RING_COOLDOWN_MS`.
+   */
+  #allowed(message) {
+    if (typeof message.type === 'string' && message.type.startsWith('history-')) return false
+
+    if (message.type === 'test-ring') {
+      const now = Date.now()
+      if (now - this.#lastTestRingAt < TEST_RING_COOLDOWN_MS) return false
+      this.#lastTestRingAt = now
+    }
+
+    return true
+  }
+
   /** Talking back, and asking for a different picture. The same words the Worker relays. */
   #relay(session, payload) {
     if (payload[0] === KIND_JSON) {
       try {
-        // Handed the viewer's own way back as well as the message: most of what a phone asks
-        // for is broadcast to everyone watching, but a list of visits or a recording belongs
-        // to the phone that asked for it.
-        this.#onMessage(JSON.parse(payload.subarray(1).toString('utf8')), this.#sink(session))
+        const message = JSON.parse(payload.subarray(1).toString('utf8'))
+        if (!this.#allowed(message)) return
+        // Handed the viewer's own way back as well as the message: what a phone asks for is
+        // mostly broadcast to everyone watching, but an answer to a question belongs to the
+        // phone that asked it.
+        this.#onMessage(message, this.#sink(session))
       } catch {
         // A viewer that sends rubbish is ignored rather than disconnected: the stream is
         // worth more than the point.
@@ -390,12 +473,23 @@ export class LocalServer {
   #sink(session) {
     if (session.sink) return session.sink
 
+    // Written, and then let go of if the phone is too far behind to be watching. Dropping frames
+    // instead would leave it decoding a picture with holes in it; a phone that is let go asks
+    // again and starts from a clean keyframe.
+    const deliver = (payload) => {
+      const { socket } = session
+      if (!write(socket, payload)) return
+      if (socket.writableLength <= MAX_QUEUED_BYTES) return
+      this.log(`local: ${socket.remoteAddress} fell behind; letting it go`)
+      socket.destroy()
+    }
+
     session.sink = {
       send: (payload) => {
         const body = Buffer.from(JSON.stringify(payload), 'utf8')
-        write(session.socket, Buffer.concat([Buffer.from([KIND_JSON]), body]))
+        deliver(Buffer.concat([Buffer.from([KIND_JSON]), body]))
       },
-      sendBinary: (chunk) => write(session.socket, chunk),
+      sendBinary: (chunk) => deliver(chunk),
     }
 
     return session.sink
@@ -421,6 +515,9 @@ const BEACON_PROBE = 'AJAR?'
 const BEACON_MAX_PER_WINDOW = 10
 const BEACON_WINDOW_MS = 1_000
 
+/** One line about answering a minute: ten answers a second, all day, is a log full of nothing. */
+const BEACON_LOG_EVERY_MS = 60_000
+
 /**
  * The networks a house is on: RFC 1918, and the link-local range a machine falls back to when
  * nothing handed it an address.
@@ -442,6 +539,23 @@ function isPrivateAddress(address) {
 }
 
 /**
+ * Whether an address is somewhere inside a house: the private IPv4 ranges above, and their IPv6
+ * counterparts — loopback, link-local (fe80::/10) and unique local (fc00::/7).
+ *
+ * The beacon needed only the first half, because it only ever listens on IPv4. The TCP port
+ * listens on both, and a Pi with a public IPv6 address behind a router that lets it in is on
+ * the internet whether or not anybody meant it to be.
+ */
+export function isHouseAddress(address) {
+  if (typeof address !== 'string' || address === '') return false
+  if (isPrivateAddress(address)) return true
+
+  const lower = address.toLowerCase()
+  if (lower === '::1') return true
+  return /^fe[89ab][0-9a-f]:/.test(lower) || /^f[cd][0-9a-f]{2}:/.test(lower)
+}
+
+/**
  * Answers a phone that is looking for an agent and does not yet know where to look.
  *
  * The address cannot come from the server, because a phone that has not paired yet has nothing
@@ -458,6 +572,8 @@ export function startBeacon({ serial, log }) {
 
   let answeredInWindow = 0
   let windowStartedAt = 0
+  let loggedAt = 0
+  let answeredSinceLog = 0
 
   socket.on('message', (message, from) => {
     if (message.toString('utf8').trim() !== BEACON_PROBE) return
@@ -483,7 +599,13 @@ export function startBeacon({ serial, log }) {
       'utf8'
     )
     socket.send(answer, from.port, from.address)
-    log(`beacon: answered ${from.address}`)
+
+    answeredSinceLog += 1
+    if (now - loggedAt < BEACON_LOG_EVERY_MS) return
+    const others = answeredSinceLog - 1
+    log(`beacon: answered ${from.address}${others > 0 ? ` and ${others} more since the last line` : ''}`)
+    loggedAt = now
+    answeredSinceLog = 0
   })
 
   socket.on('error', (error) => {
