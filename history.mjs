@@ -323,8 +323,11 @@ export class History {
     // house, which is what happened while only `beginVisit` knew to stay quiet.
     if (!this.#writable) return null
 
+    // Nobody is named when nobody is known. An opening from the app always arrives with a name —
+    // the command handler fills one in — so the only thing that reached a fallback here was a
+    // card or a button at the gate, and "a phone" was the one answer certain to be wrong.
     if (this.#visit) {
-      this.#visit.openedBy = by ?? name ?? 'a phone'
+      this.#visit.openedBy = by ?? name ?? null
       this.#visit.openedAt = Date.now()
       this.#visit.method = method
       if (door) this.#visit.door = door
@@ -338,7 +341,7 @@ export class History {
       kind: 'gate',
       method,
       door,
-      openedBy: by ?? name ?? 'a phone',
+      openedBy: by ?? name ?? null,
     }
     this.#append(entry)
     return entry

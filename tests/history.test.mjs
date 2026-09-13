@@ -158,6 +158,32 @@ describe('the history', () => {
     assert.equal(latest.openedBy, 'Blue fob')
   })
 
+  test('does not credit a phone with a gate somebody opened at the gate', async () => {
+    const dir = scratch()
+    const history = await opened(dir)
+
+    // What the agent reports for a card held to the reader: the intercom says a gate opened and
+    // nothing about who. The app prints `openedBy` as the row's name, so a guess here read as
+    // "a phone · with a card" — a phone that was never involved.
+    history.noteGateOpened({ by: null, method: 'card' })
+    const [alone] = history.list()
+    assert.equal(alone.kind, 'gate')
+    assert.equal(alone.method, 'card')
+    assert.equal(alone.openedBy, null)
+
+    // The same during a visit, where it read "answered and opened" for a phone that only
+    // answered.
+    history.beginVisit({})
+    history.noteAnswered('Pixel 7')
+    history.noteGateOpened({ by: null, method: 'card' })
+    history.endVisit('done')
+
+    const [visit] = history.list()
+    assert.equal(visit.answeredBy, 'Pixel 7')
+    assert.equal(visit.method, 'card')
+    assert.equal(visit.openedBy, null)
+  })
+
   test('survives being restarted, and collapses its corrections', async () => {
     const dir = scratch()
     const first = await opened(dir)
