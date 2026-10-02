@@ -7,3 +7,6 @@ agent.json
 
 .DS_Store
 node_modules/
+
+# Built Synology packages; synology/build.sh writes them here.
+dist/

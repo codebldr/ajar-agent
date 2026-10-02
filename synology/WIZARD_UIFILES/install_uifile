@@ -1,0 +1,36 @@
+[{
+    "step_title": "Your intercom",
+    "items": [{
+        "desc": "Ajar finds the intercom on your network by itself. It only needs the intercom's own password — the one its web page asks for. Not your Ajar account, and not the account of the manufacturer's app."
+    }, {
+        "type": "password",
+        "desc": "Intercom password",
+        "subitems": [{
+            "key": "wizard_password",
+            "desc": "Password",
+            "validator": {
+                "allowBlank": false
+            }
+        }]
+    }, {
+        "type": "textfield",
+        "desc": "Leave this empty. Only if Ajar later says it found no intercom, or more than one, reinstall and type the intercom's address here — for instance 192.168.1.108.",
+        "subitems": [{
+            "key": "wizard_host",
+            "desc": "Intercom address (optional)",
+            "emptyText": "found automatically",
+            "validator": {
+                "allowBlank": true,
+                "regex": {
+                    "expr": "/^$|^([0-9]{1,3}\\.){3}[0-9]{1,3}$/",
+                    "errorText": "An address looks like 192.168.1.108."
+                }
+            }
+        }]
+    }]
+}, {
+    "step_title": "Then, on your phone",
+    "items": [{
+        "desc": "When the installation finishes, open the Ajar app on a phone on your home Wi-Fi and tap Add device. It finds the intercom by itself. If it does not, Package Center → Ajar → View log shows a six-digit code to type instead."
+    }]
+}]

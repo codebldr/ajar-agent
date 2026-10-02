@@ -10,7 +10,8 @@ questions you will be asked, and what to do when it does not work.
 | Your machine | Guide |
 |---|---|
 | Raspberry Pi, Ubuntu, Debian, any Linux | **[Raspberry Pi](install/raspberry-pi.md)** |
-| Synology, QNAP, Unraid, Asustor, TrueNAS | **[NAS](install/nas.md)** |
+| Synology, from Package Center (beta) | **[Synology](install/synology.md)** |
+| Synology, QNAP, Unraid, Asustor, TrueNAS, with Docker | **[NAS](install/nas.md)** |
 | Home Assistant OS or Supervised | **[Home Assistant](install/home-assistant.md)** — add this repository to the add-on store |
 | Any Linux machine with Docker | **[Docker](install/docker.md)** |
 | Mac | **[Mac](install/mac.md)** |

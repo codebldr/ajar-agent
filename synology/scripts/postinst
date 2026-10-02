@@ -1,0 +1,14 @@
+#!/bin/sh
+# Keeps the install wizard's answers for the agent to pick up when it starts.
+#
+# The wizard hands them over as environment variables named after its fields. They are written
+# here as they are, one value per file and readable by the package alone; app/configure.mjs moves
+# them into the settings. An upgrade runs this too, with no wizard and so with nothing to keep.
+# A reinstall after an uninstall does show the wizard, and that is how a changed password gets in.
+
+umask 077
+
+[ -n "$wizard_password" ] && printf '%s' "$wizard_password" > "$SYNOPKG_PKGVAR/wizard_password"
+[ -n "$wizard_host" ] && printf '%s' "$wizard_host" > "$SYNOPKG_PKGVAR/wizard_host"
+
+exit 0

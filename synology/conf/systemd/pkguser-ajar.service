@@ -1,0 +1,10 @@
+[Unit]
+Description=Ajar intercom agent
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/var/packages/ajar/target/app/ajar-start
+Restart=always
+RestartSec=5
+KillMode=process

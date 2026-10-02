@@ -1,0 +1,14 @@
+{
+  "systemd-user-unit": {},
+  "data-share": {
+    "shares": [{
+      "name": "ajar",
+      "permission": {
+        "rw": ["ajar"]
+      }
+    }]
+  },
+  "port-config": {
+    "protocol-file": "app/ajar.sc"
+  }
+}

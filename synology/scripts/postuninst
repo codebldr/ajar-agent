@@ -1,0 +1,4 @@
+#!/bin/sh
+# The `ajar` shared folder is left where it is: it holds the agent's identity, and a reinstall
+# that finds it carries on as the same agent. Deleting it is the owner's call, in File Station.
+exit 0

@@ -20,6 +20,7 @@ questions you will be asked, and what to do when it does not work.
 | Where it runs | | How it goes in |
 |---|---|---|
 | Raspberry Pi, and any Linux | **[Install guide →](docs/install/raspberry-pi.md)** | one command, then a service that survives a power cut |
+| Synology | **[Install guide →](docs/install/synology.md)** | a package from Package Center, no Docker (beta) |
 | NAS — Synology, QNAP, Unraid, Asustor | **[Install guide →](docs/install/nas.md)** | Docker, with the clicking for each brand |
 | Home Assistant | **[Install guide →](docs/install/home-assistant.md)** | an add-on — this repository is its store |
 | Docker, anywhere else | **[Install guide →](docs/install/docker.md)** | `docker run`, or compose |

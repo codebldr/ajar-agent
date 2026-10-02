@@ -4,6 +4,9 @@ Ajar needs one small program — the agent — running at home, on the same netw
 intercom. A NAS is a good place for it: it is always on. This page sets it up from the NAS's own
 screens, with no terminal.
 
+**On a Synology there is a simpler way:** a package for Package Center, with no Docker — meant
+for the "j" models too. See **[Synology, from Package Center](synology.md)** (beta).
+
 **You need:**
 
 - **A NAS that runs Docker.** Synology: most "+" models (DS220+, DS923+, DS1522+ …) — look for
@@ -117,9 +120,11 @@ pair with a code: in the app choose **Enter serial manually**, then type the ser
 restarting the container prints a new one.
 
 **"No intercom answered on this network."** Check that the network is **host** — it is the
-cause almost every time. If it is, the intercom is probably behind a second router. Find its
-address — the router's list of connected devices shows it, or whoever installed the intercom
-knows it — and add a variable `VTO_HOST` with that address, for instance `192.168.100.2`.
+cause almost every time. The agent looks on its own network first and then on the addresses home
+routers usually hand out, so an intercom behind a second router is normally found as well. If it
+still is not, the intercom is on an unusual address: find it — the router's list of connected
+devices shows it, or whoever installed the intercom knows it — and add a variable `VTO_HOST`
+with that address, for instance `192.168.100.2`.
 
 **"More than one intercom answered."** The log lists them. Add `VTO_HOST` with the address of the
 one you want.

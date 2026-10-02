@@ -1,0 +1,27 @@
+#!/bin/sh
+# Package Center's start, stop and status, handed to the package's systemd user unit.
+#
+# DSM runs this as the package's own user, except on the occasions it runs it as root; the unit
+# belongs to the package user either way, so root goes through sudo.
+
+unit=pkguser-ajar
+
+run() {
+  if [ "$(id -u)" -eq 0 ]; then
+    sudo -u ajar synosystemctl "$@" "$unit"
+  else
+    synosystemctl "$@" "$unit"
+  fi
+}
+
+case "$1" in
+  start) run start ;;
+  stop) run stop ;;
+  status) run get-active-status ;;
+  # Package Center's "View log" shows the file named here — which is where the pairing code is.
+  log) echo "/var/packages/ajar/shares/ajar/ajar.log" ;;
+  *)
+    echo "Usage: $0 {start|stop|status|log}" >&2
+    exit 1
+    ;;
+esac

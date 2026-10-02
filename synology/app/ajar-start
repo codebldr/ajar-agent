@@ -1,0 +1,38 @@
+#!/bin/sh
+# Runs the agent on a Synology, under the package's own user, from its systemd unit.
+#
+# The settings and the recordings live in the `ajar` shared folder rather than in the package's
+# own directory, for one reason: a shared folder survives an uninstall. The agent's secret is in
+# there, and the Worker refuses a second secret for a device that already has one — so a
+# reinstall that started from nothing would leave the house unable to reconnect until somebody
+# removed the device from the app.
+
+DATA="$(readlink -f /var/packages/ajar/shares/ajar)"
+LOG="$DATA/ajar.log"
+
+export AJAR_CONFIG="$DATA/agent.json"
+
+# Synology's own Node.js package, newest first. The agent needs 18 or later and nothing else.
+for version in 22 20 18; do
+  candidate="/var/packages/Node.js_v$version/target/usr/local/bin/node"
+  if [ -x "$candidate" ]; then
+    NODE="$candidate"
+    break
+  fi
+done
+NODE="${NODE:-$(command -v node)}"
+
+# One old log kept beside the current one, so a NAS that has run for a year does not carry a
+# year of doorbells in a text file.
+if [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 2000000 ]; then
+  mv -f "$LOG" "$LOG.1"
+fi
+
+if [ -z "$NODE" ]; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) Node.js is not installed. Install it from Package Center." >> "$LOG"
+  exit 1
+fi
+
+"$NODE" /var/packages/ajar/target/app/configure.mjs >> "$LOG" 2>&1
+
+exec "$NODE" /var/packages/ajar/target/agent.mjs >> "$LOG" 2>&1
