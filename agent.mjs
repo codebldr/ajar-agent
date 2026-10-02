@@ -1464,7 +1464,9 @@ async function findIntercoms() {
 }
 
 function describe(device) {
-  const parts = [device.model || device.deviceClass || 'device', device.host]
+  // The port is shown because setup uses the one the intercom names here, and a wrong one
+  // looks exactly like a wrong password from the outside.
+  const parts = [device.model || device.deviceClass || 'device', `${device.host}:${device.httpPort}`]
   if (device.serial) parts.push(device.serial)
 
   // Nothing on this network had to prove anything to appear on this list, and the next question
@@ -1669,7 +1671,7 @@ async function configureHeadless() {
 
     config.host = found[0].host
     config.port = found[0].httpPort ?? config.port
-    log(`found ${found[0].serial} at ${config.host}`)
+    log(`found ${found[0].serial} at ${config.host}:${config.port}`)
   }
 
   if (!config.deviceId) {
@@ -1683,10 +1685,11 @@ async function configureHeadless() {
     }).catch((error) => {
       console.error(
         error.message.includes('401')
-          ? `The intercom refused the account "${config.username}".\n` +
+          ? `The intercom at ${config.host}:${config.port} refused the account "${config.username}".\n` +
             'That is the intercom\'s own account — the one its web page asks for — and it is\n' +
-            '`admin` on almost every one of these. Set VTO_USERNAME if yours was changed.'
-          : `Could not reach the intercom: ${error.message}`
+            '`admin` on almost every one of these. Set VTO_USERNAME if yours was changed.\n' +
+            'If its web page opens on a port other than the one above, set VTO_PORT to that one.'
+          : `Could not reach the intercom at ${config.host}:${config.port}: ${error.message}`
       )
       process.exit(1)
     })
@@ -1948,5 +1951,36 @@ const HEALTHY_ATTACH_MS = 60_000
 // then out, rather than dying with a stack trace nobody reads and an exit code that says fine.
 main().catch((error) => {
   console.error(`\nThe agent stopped: ${error.message}`)
+  explainUnwritableConfig(error)
   process.exit(1)
 })
+
+/**
+ * Says what to do when the settings folder belongs to somebody else.
+ *
+ * On a NAS this is the usual first run: a folder made in the NAS's own screens belongs to the
+ * NAS's user, the container runs as its own, and the first write is refused. The bare error
+ * names the file but not the cure, and the cure found by searching is `chmod 777` — which leaves
+ * the intercom's password readable by everybody on the machine. So the one right command is
+ * printed instead, with this process's own numbers in it.
+ */
+function explainUnwritableConfig(error) {
+  if (error?.code !== 'EACCES' && error?.code !== 'EPERM') return
+  const folder = dirname(CONFIG_PATH)
+  if (!error.path?.startsWith(folder)) return
+
+  // Windows has neither, and nothing there mounts a folder into the agent anyway.
+  const uid = process.getuid?.()
+  const gid = process.getgid?.()
+  if (uid === undefined) return
+
+  console.error(`
+The agent runs as user ${uid} (group ${gid}) and may not write in ${folder}.
+If that is a folder from the NAS mounted into a container, give it to that user — run this on
+the NAS itself, with the folder's real path there:
+
+  sudo chown -R ${uid}:${gid} /path/to/the/folder
+
+Nothing else: no chmod. The agent makes its own files private, and opening the folder to
+everybody would let anyone on the machine read the intercom's password.`)
+}
