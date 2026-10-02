@@ -19,8 +19,8 @@ included — wherever Package Center offers Node.js, which the package uses.
 
 ## 1. Download the package
 
-From the [latest release][releases], download `ajar-….spk` — there is one file, for every
-Synology.
+From the [releases page][releases], download `ajar-….spk` from the newest release — there is one
+file, for every Synology.
 
 ## 2. Install it
 
@@ -78,5 +78,5 @@ one.
 **"Node.js is not installed."** Package Center → search **Node.js** → install **Node.js v22** →
 **Run** Ajar again.
 
-[releases]: https://github.com/codebldr/ajar-agent/releases/latest
+[releases]: https://github.com/codebldr/ajar-agent/releases
 [issues]: https://github.com/codebldr/ajar-agent/issues
