@@ -10,15 +10,14 @@ with a network of its own, so `--network host` gets you the VM's network rather 
 
 ---
 
-## 1. Build it
-
-There is no published image yet, so build from source:
+## 1. Get it
 
 ```sh
-git clone https://github.com/codebldr/ajar-agent.git
-cd ajar-agent
-docker build -t ajar-agent .
+docker pull ghcr.io/codebldr/ajar-agent
 ```
+
+For x86, 64-bit ARM and 32-bit ARM. Building it yourself instead is
+`docker build -t ghcr.io/codebldr/ajar-agent .` in a clone of this repository.
 
 ## 2. Run it
 
@@ -28,7 +27,7 @@ docker run -d --name ajar \
   --restart unless-stopped \
   -v ajar-config:/config \
   -e VTO_PASSWORD='your-intercom-password' \
-  ajar-agent
+  ghcr.io/codebldr/ajar-agent
 ```
 
 Neither flag is decoration:
@@ -40,6 +39,16 @@ Neither flag is decoration:
   has to pair again, and the history goes with the old container: Docker makes a volume nobody
   named, and removing the container leaves it behind. Name it, as above, or point it at a folder
   of your own — `-v /srv/ajar:/config`. The agent says so in its log if it was started without.
+
+A folder of your own has to be given to the agent first. It runs as user `1001` inside the
+container, not as root, and a folder you made belongs to you:
+
+```sh
+sudo chown -R 1001:1001 /srv/ajar
+```
+
+That is all — no `chmod`. The agent keeps its own files private. A named volume, as above, needs
+none of this.
 
 Single quotes around the password, or a `$` in it disappears before Docker sees it.
 
@@ -65,7 +74,7 @@ Same thing, if you would rather keep it in a file:
 ```yaml
 services:
   ajar:
-    build: .
+    image: ghcr.io/codebldr/ajar-agent
     container_name: ajar
     network_mode: host
     restart: unless-stopped
@@ -104,7 +113,7 @@ All optional except the password.
 | `AJAR_CONFIG` | Where settings are kept. Already `/config/agent.json` in the image. |
 | `AJAR_DATA` | Where recordings are kept. Beside the settings unless told otherwise — set it to put video on a different disk than the configuration. |
 
-`docker run --rm ajar-agent --help` lists the rest.
+`docker run --rm ghcr.io/codebldr/ajar-agent --help` lists the rest.
 
 ---
 
@@ -120,11 +129,12 @@ docker rm -f ajar          # remove it; the ajar-config volume survives
 **To update:**
 
 ```sh
-git pull
-docker build -t ajar-agent .
+docker pull ghcr.io/codebldr/ajar-agent
 docker rm -f ajar
 # then the same docker run as above
 ```
+
+With compose: `docker compose pull && docker compose up -d`.
 
 Settings and paired phones come back with the volume.
 
@@ -142,7 +152,7 @@ docker inspect -f '{{.HostConfig.NetworkMode}}' ajar
 If it is right, see what the agent can actually see:
 
 ```sh
-docker run --rm --network host ajar-agent --discover
+docker run --rm --network host ghcr.io/codebldr/ajar-agent --discover
 ```
 
 Nothing listed means the machine and the intercom are on different networks, or the intercom is
@@ -154,11 +164,21 @@ to open. `-e VTO_HOST=` with the one you want.
 **"The intercom refused that username and password."** That account is the intercom's own — the
 one that opens its web page at `http://192.168.x.x`, not your Ajar account.
 
+**"EACCES: permission denied, open '/config/agent.json'".** `/config` is a folder of yours that
+the agent may not write in. Give it to the agent's user — the log prints the exact command — and
+start it again:
+
+```sh
+sudo chown -R 1001:1001 /srv/ajar
+```
+
+Not `chmod 777`: that makes the intercom's password readable by everyone on the machine.
+
 **The doorbell rings at the gate but not on the phone.** Dahua's event codes vary by model:
 
 ```sh
 docker stop ajar
-docker run --rm --network host -v ajar-config:/config ajar-agent --watch
+docker run --rm --network host -v ajar-config:/config ghcr.io/codebldr/ajar-agent --watch
 ```
 
 Press the doorbell, then [open an issue][issues] with what it printed. The codes are settings

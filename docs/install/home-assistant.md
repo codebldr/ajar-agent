@@ -45,7 +45,7 @@ It builds the image on your own machine, which takes a couple of minutes on a Pi
 Pi Zero. There is no image downloaded from anywhere — the add-on fetches the agent's source and
 builds it in front of you.
 
-[my-link]: https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository=https%3A%2F%2Fgithub.com%2Fromeoonisim%2Fajar-agent
+[my-link]: https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository=https%3A%2F%2Fgithub.com%2Fcodebldr%2Fajar-agent
 
 ## 3. Configure it
 

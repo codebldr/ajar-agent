@@ -1,0 +1,52 @@
+# Publishes the agent as a ready-made image, so a NAS can pull it instead of building it.
+#
+# Building on the NAS was the hard part of every first install: no git, a tarball instead, a
+# terminal most owners had never opened. Pulled from a registry, the NAS's own screens can do
+# the whole thing.
+#
+# `main` becomes `latest`; a tag `v1.2.3` becomes `1.2.3` as well. Three architectures, because
+# the machines this runs on are an x86 NAS, a 64-bit Pi, and the older 32-bit Pis and ARM boxes.
+
+name: image
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/ajar-agent
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=sha
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

@@ -48,11 +48,8 @@ Both flags matter: without them the agent cannot find your intercom, and it forg
 on every update.
 
 ```sh
-git clone https://github.com/codebldr/ajar-agent.git
-cd ajar-agent
-docker build -t ajar-agent .
 docker run -d --name ajar --network host --restart unless-stopped \
-  -v ajar-config:/config -e VTO_PASSWORD='your-intercom-password' ajar-agent
+  -v ajar-config:/config -e VTO_PASSWORD='your-intercom-password' ghcr.io/codebldr/ajar-agent
 docker logs -f ajar
 ```
 
