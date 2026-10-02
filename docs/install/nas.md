@@ -24,18 +24,10 @@ Whatever route you take below, these two decide whether it works at all:
 
 If the container starts and says it found no intercom, it is the network mode. Every time.
 
-**A folder has to be handed to the agent.** The agent runs as user `1001` inside the container,
-not as root. A folder made in the NAS's own screens belongs to the NAS's user, so the agent stops
-at once with `EACCES: permission denied, open '/config/agent.json'`. Give the folder to it, once,
-from the NAS's terminal:
-
-```sh
-sudo chown -R 1001:1001 /volume1/docker/ajar/config
-```
-
-Nothing else — no `chmod`. The agent keeps its own files private, and `chmod 777`, which a web
-search will offer, makes the intercom's password readable by everyone on the NAS. A named volume
-(`ajar-config` below) needs none of this.
+**Any folder will do, as it is.** A folder made in the NAS's own screens belongs to the NAS's
+user; the container takes it over for the agent's own user when it starts, so there is nothing
+to `chown` and nothing to `chmod`. Do not open the folder up with `chmod 777` either — a web
+search will offer it, and it makes the intercom's password readable by everyone on the NAS.
 
 Only the password is needed. The agent finds the intercom by itself; set `VTO_HOST` only if it
 says it found none, or more than one.
@@ -116,15 +108,15 @@ A project is the one screen that takes everything at once, the named volume incl
 4. Next, Done. Then **Container → ajar → Log** for the pairing code.
 
 To keep the settings in a folder you can see in File Station instead, write
-`/volume1/docker/ajar/config:/config` in place of `ajar-config:/config`, drop the last two lines,
-and run the `chown` above on that folder before starting.
+`/volume1/docker/ajar/config:/config` in place of `ajar-config:/config` and drop the last two
+lines. Make the folder first, in File Station.
 
 ### QNAP — Container Station
 
 1. **Container Station → Create → search** `ghcr.io/codebldr/ajar-agent`
 2. **Advanced Settings → Network**: mode **Host**
 3. **Advanced Settings → Environment**: `VTO_PASSWORD` = the intercom's password
-4. **Advanced Settings → Shared Folders**: a folder → `/config` — after the `chown` above
+4. **Advanced Settings → Shared Folders**: a folder → `/config`
 5. Create, then **Logs** for the pairing code
 
 ### Unraid — Docker tab
@@ -133,7 +125,7 @@ and run the `chown` above on that folder before starting.
 2. Repository: `ghcr.io/codebldr/ajar-agent`
 3. Network Type: **Host**
 4. Add variable: `VTO_PASSWORD` = the intercom's password
-5. Add path: `/mnt/user/appdata/ajar` → `/config` — after the `chown` above
+5. Add path: `/mnt/user/appdata/ajar` → `/config`
 6. Apply, then the container's **Log** for the pairing code
 
 ---
@@ -184,9 +176,10 @@ to open. Add `-e VTO_HOST=` with the one you want.
 **"The intercom refused that username and password."** That account is the intercom's own — the
 one that opens its web page. Add `-e VTO_USERNAME=…` if it is not `admin`.
 
-**"EACCES: permission denied, open '/config/agent.json'".** `/config` is a NAS folder the agent
-may not write in. Run the `chown` from [the top of this page](#two-settings-that-are-not-optional)
-on it — the log prints the exact command — and start the container again.
+**"EACCES: permission denied, open '/config/agent.json'".** The image is older than October 2026
+and does not take the folder over by itself — pull the current one and start again. Or the
+container was given a user of its own (`--user`, or a *User* field in the NAS's screen); then it
+cannot take anything over, and the log prints the `chown` that hands the folder to that user.
 
 **It asks for the password again after every update.** The `/config` volume is missing or points
 somewhere new.

@@ -40,15 +40,10 @@ Neither flag is decoration:
   named, and removing the container leaves it behind. Name it, as above, or point it at a folder
   of your own — `-v /srv/ajar:/config`. The agent says so in its log if it was started without.
 
-A folder of your own has to be given to the agent first. It runs as user `1001` inside the
-container, not as root, and a folder you made belongs to you:
+A folder of yours works as it is. The container starts as root only long enough to hand `/config`
+to the agent's own user (`1001`), then runs the agent as that user. No `chown`, no `chmod`.
 
-```sh
-sudo chown -R 1001:1001 /srv/ajar
-```
-
-That is all — no `chmod`. The agent keeps its own files private. A named volume, as above, needs
-none of this.
+Running it with `--user` instead skips that step, and the folder must already belong to that user.
 
 Single quotes around the password, or a `$` in it disappears before Docker sees it.
 
@@ -164,9 +159,10 @@ to open. `-e VTO_HOST=` with the one you want.
 **"The intercom refused that username and password."** That account is the intercom's own — the
 one that opens its web page at `http://192.168.x.x`, not your Ajar account.
 
-**"EACCES: permission denied, open '/config/agent.json'".** `/config` is a folder of yours that
-the agent may not write in. Give it to the agent's user — the log prints the exact command — and
-start it again:
+**"EACCES: permission denied, open '/config/agent.json'".** Either the image is older than
+October 2026 — `docker pull` the current one — or it was started with `--user`, which leaves the
+folder as it was. In that case give the folder to that user; the log prints the exact command,
+for instance:
 
 ```sh
 sudo chown -R 1001:1001 /srv/ajar

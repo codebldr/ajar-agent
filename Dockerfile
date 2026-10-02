@@ -15,16 +15,20 @@
 
 FROM node:20-alpine
 
-# No dependencies to install — that is the point of the agent having none. Only the source.
+# No dependencies to install — that is the point of the agent having none. Only the source,
+# and su-exec, which is how the entrypoint lets go of root.
 WORKDIR /app
 COPY *.mjs ./
+COPY entrypoint.sh /entrypoint.sh
+RUN apk add --no-cache su-exec && chmod 755 /entrypoint.sh
 
 # Somewhere for the configuration that is not inside the image.
 ENV AJAR_CONFIG=/config/agent.json
 VOLUME /config
 
-# Nothing here needs root: the agent opens one high port and reads its own configuration.
+# The agent itself needs no root: it opens one high port and reads its own configuration. The
+# container starts as root only so the entrypoint can hand a mounted folder to `ajar` — see
+# entrypoint.sh — and the agent then runs as `ajar`, as it always has.
 RUN adduser -D -H ajar && mkdir -p /config && chown ajar /config
-USER ajar
 
-ENTRYPOINT ["node", "/app/agent.mjs"]
+ENTRYPOINT ["/entrypoint.sh"]
