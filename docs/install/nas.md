@@ -79,9 +79,21 @@ prints a new one.
 
 ## The long way: the NAS's own screens
 
-The image is published at `ghcr.io/codebldr/ajar-agent`, so nothing has to be built.
+The image is published on Docker Hub as `codebldr/ajar-agent`, and on GitHub as
+`ghcr.io/codebldr/ajar-agent` — the same image in both places, so nothing has to be built.
 
-### Synology — Container Manager
+### Synology — Container Manager, by searching
+
+1. In **File Station**, make a folder for the settings — `docker/ajar`, for instance.
+2. **Container Manager → Registry**, search `codebldr/ajar-agent`, **Download**, tag `latest`.
+3. **Image** → `codebldr/ajar-agent` → **Run**.
+4. Tick **Enable auto-restart**.
+5. **Volume**: *Add Folder* → the folder from step 1 → mount path `/config`.
+6. **Network**: `host`.
+7. **Environment**: add `VTO_PASSWORD` = the intercom's password.
+8. **Done**, then **Container → ajar-agent → Log** for the pairing code.
+
+### Synology — Container Manager, as a project
 
 A project is the one screen that takes everything at once, the named volume included:
 
@@ -92,7 +104,7 @@ A project is the one screen that takes everything at once, the named volume incl
    ```yaml
    services:
      ajar:
-       image: ghcr.io/codebldr/ajar-agent
+       image: codebldr/ajar-agent
        container_name: ajar
        network_mode: host
        restart: unless-stopped
@@ -113,7 +125,7 @@ lines. Make the folder first, in File Station.
 
 ### QNAP — Container Station
 
-1. **Container Station → Create → search** `ghcr.io/codebldr/ajar-agent`
+1. **Container Station → Create → search** `codebldr/ajar-agent`
 2. **Advanced Settings → Network**: mode **Host**
 3. **Advanced Settings → Environment**: `VTO_PASSWORD` = the intercom's password
 4. **Advanced Settings → Shared Folders**: a folder → `/config`
@@ -122,7 +134,7 @@ lines. Make the folder first, in File Station.
 ### Unraid — Docker tab
 
 1. **Docker → Add Container**
-2. Repository: `ghcr.io/codebldr/ajar-agent`
+2. Repository: `codebldr/ajar-agent`
 3. Network Type: **Host**
 4. Add variable: `VTO_PASSWORD` = the intercom's password
 5. Add path: `/mnt/user/appdata/ajar` → `/config`
